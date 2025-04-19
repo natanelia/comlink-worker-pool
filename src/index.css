@@ -1,0 +1,42 @@
+body {
+  font-family: Arial, sans-serif;
+  margin: 20px;
+}
+
+.app {
+  max-width: 600px;
+  margin: auto;
+}
+
+.controls, .stats {
+  margin-bottom: 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.controls label {
+  display: flex;
+  flex-direction: column;
+  font-weight: bold;
+}
+
+.stats span {
+  font-size: 14px;
+}
+
+.log {
+  list-style: none;
+  padding: 0;
+  max-height: 500px;
+  overflow-y: auto;
+  border: 1px solid #ccc;
+  padding: 10px;
+  overflow-x: auto;
+  white-space: nowrap;
+  max-width: none;
+}
+
+.log li {
+  margin-bottom: 4px;
+}
