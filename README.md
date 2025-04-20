@@ -13,7 +13,6 @@
 - 🚀 Effortless parallelism: Offload heavy computation to workers, keep your UI snappy
 - 🧩 Modular: Use just the core, or drop in React bindings for instant hooks
 - 🦾 TypeScript-first: Full type safety across packages
-- ⚡ Blazing fast builds and workspace management with Bun
 - 🛠️ OSS-friendly: Clean structure, easy contributions, and clear docs
 
 ---
@@ -63,6 +62,7 @@ comlink-plus/
 ## 🤝 Contributing
 
 We love OSS! Issues and PRs are welcome — see the individual package READMEs for details:
+
 - [comlink-worker-pool](./packages/comlink-worker-pool/README.md)
 - [comlink-worker-pool-react](./packages/comlink-worker-pool-react/README.md)
 - [playground](./packages/playground/README.md)
