@@ -1,33 +1,47 @@
-# comlink-plus Monorepo
+# ⚡️ comlink-plus Monorepo
 
-A modern Bun-based monorepo for high-performance web workers in React and JavaScript/TypeScript projects.
+[![bun compatible](https://img.shields.io/badge/bun-%E2%9C%94%EF%B8%8F-green)](https://bun.sh/)
+[![CI](https://github.com/natanelia/comlink-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-plus/actions)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**comlink-plus** provides:
+**The modern monorepo for high-performance, ergonomic web worker pools in React, JS, and TypeScript — powered by Bun and Comlink.**
 
-- [**comlink-worker-pool**](./packages/comlink-worker-pool/README.md): A reusable, Comlink-based worker pool library for parallel processing in web apps
-- [**comlink-worker-pool-react**](./packages/comlink-worker-pool-react/README.md): React bindings for comlink-worker-pool, including the `useWorkerPool` hook
-- [**playground**](./packages/playground/README.md): An interactive React demo app showcasing the worker pool and React bindings in action
+---
 
-## Getting Started
+## ✨ Why comlink-plus?
+
+- 🚀 Effortless parallelism: Offload heavy computation to workers, keep your UI snappy
+- 🧩 Modular: Use just the core, or drop in React bindings for instant hooks
+- 🦾 TypeScript-first: Full type safety across packages
+- ⚡ Blazing fast builds and workspace management with Bun
+- 🛠️ OSS-friendly: Clean structure, easy contributions, and clear docs
+
+---
+
+## 📦 Packages
+
+- [**comlink-worker-pool**](./packages/comlink-worker-pool/README.md): Reusable, Comlink-based worker pool library for parallel processing
+- [**comlink-worker-pool-react**](./packages/comlink-worker-pool-react/README.md): React bindings for the worker pool, including the `useWorkerPool` hook
+- [**playground**](./packages/playground/README.md): Interactive React demo app showcasing the worker pool and React bindings
+
+## 🚀 Quick Start
 
 1. **Install dependencies**
-
    ```bash
    bun install
    ```
-
 2. **Build the worker pool library**
-
    ```bash
    bun run --filter comlink-worker-pool build
    ```
-
 3. **Run the playground demo**
    ```bash
    bun run --filter playground dev
    ```
 
-## Monorepo Structure
+Or see each package's README for more advanced usage and integration.
+
+## 🗂️ Monorepo Structure
 
 ```
 comlink-plus/
@@ -40,16 +54,15 @@ comlink-plus/
 └── README.md
 ```
 
-## About
+## 🛠️ Tech Stack
 
-- Built with [Bun](https://bun.sh/) for fast builds and workspace management
-- Worker pool powered by [Comlink](https://github.com/GoogleChromeLabs/comlink)
-- Playground built with [React](https://react.dev/) and [Vite](https://vitejs.dev/)
+- [Bun](https://bun.sh/) for ultra-fast builds and workspace management
+- [Comlink](https://github.com/GoogleChromeLabs/comlink) for type-safe, ergonomic worker communication
+- [React](https://react.dev/) + [Vite](https://vitejs.dev/) for a modern playground/demo
 
-## Contributing
+## 🤝 Contributing
 
-Contributions are welcome! Please open issues or submit pull requests. For details, see the individual package READMEs:
-
+We love OSS! Issues and PRs are welcome — see the individual package READMEs for details:
 - [comlink-worker-pool](./packages/comlink-worker-pool/README.md)
 - [comlink-worker-pool-react](./packages/comlink-worker-pool-react/README.md)
 - [playground](./packages/playground/README.md)
