@@ -37,6 +37,8 @@ jobs:
           bun-version: latest
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Build comlink-worker-pool
+        run: bun run --filter comlink-worker-pool build
       - name: Test comlink-worker-pool
         run: bun run --filter comlink-worker-pool test
       - name: Test comlink-worker-pool-react
