@@ -1,0 +1,8 @@
+# Ignore lock files and config not needed in npm package
+bun.lock
+bunfig.toml
+vite.config.ts
+# Ignore source and test files (only publish built output)
+src/
+*.test.*
+*.spec.*

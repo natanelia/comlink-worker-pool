@@ -1,0 +1,7 @@
+[install]
+
+[run]
+main = "playground/index.html"
+
+[workspace]
+children = ["packages/comlink-worker-pool", "packages/playground", "packages/comlink-worker-pool-react"]

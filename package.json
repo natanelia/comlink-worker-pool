@@ -1,19 +1,22 @@
 {
-  "name": "comlink-worker-pool-react",
-  "version": "0.0.1",
-  "private": true,
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "comlink": "^4.3.0"
-  },
-  "devDependencies": {
-    "vite": "^4.4.0",
-    "@vitejs/plugin-react": "^4.0.0"
-  }
+	"name": "comlink-worker-pool-monorepo",
+	"scripts": {
+		"playground:lint": "bun run -F comlink-worker-pool-playground lint",
+		"playground:build": "bun run -F comlink-worker-pool-playground build",
+		"playground:dev": "bun run -F comlink-worker-pool-playground dev",
+		"lint": "bun run -F comlink-worker-pool-react -F comlink-worker-pool lint",
+		"build": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
+		"build:watch": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
+		"test": "bun run -F comlink-worker-pool-react -F comlink-worker-pool test"
+	},
+	"private": true,
+	"workspaces": [
+		"packages/comlink-worker-pool",
+		"packages/playground",
+		"packages/comlink-worker-pool-react"
+	],
+	"devDependencies": {
+		"@biomejs/biome": "1.9.4"
+	},
+	"trustedDependencies": ["@biomejs/biome"]
 }
