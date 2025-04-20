@@ -1,27 +1,53 @@
-# comlink-worker-pool
+# 🚀 comlink-worker-pool
 
-A reusable, high-performance Web Worker pool library for Bun and React projects, powered by [Comlink](https://github.com/GoogleChromeLabs/comlink).
+[![npm version](https://img.shields.io/npm/v/comlink-worker-pool?color=blue)](https://www.npmjs.com/package/comlink-worker-pool)
+[![bun compatible](https://img.shields.io/badge/bun-%E2%9C%94%EF%B8%8F-green)](https://bun.sh/)
+[![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Features
+**Effortless parallelism for your Bun, React, and JS/TS apps.**
 
-- Simple API for parallelizing tasks in the browser or with Bun
-- Built on top of Comlink for ergonomic worker communication
-- TypeScript support
-- Easily configurable pool size and worker factory
-- Automatic queuing and parallel execution of tasks beyond pool size for maximum throughput
-- Full error propagation from workers to main thread for seamless debugging
-- Live pool statistics and onUpdateStats callback for real-time monitoring
-- Idle worker auto-termination for resource efficiency and cost-effectiveness
-- Automatic worker recovery after crashes for high availability and reliability
-- Supports both async and sync worker APIs for flexibility and ease of use
-- Type-safe and ergonomic Comlink integration for a seamless development experience
+A blazing-fast, ergonomic Web Worker pool library powered by [Comlink](https://github.com/GoogleChromeLabs/comlink) — designed for modern web and Bun projects. Offload CPU-intensive work to a pool of workers, maximize throughput, and keep your UI smooth.
 
-## Installation
+---
 
-From the monorepo root:
+## ✨ Why comlink-worker-pool?
+
+- **Supercharge performance:** Run heavy computations in parallel without blocking the main thread.
+- **Zero-hassle API:** Simple, type-safe, and ergonomic. No boilerplate.
+- **Bun & Browser Ready:** Works seamlessly in both environments.
+- **Crash resilience:** Automatic worker recovery and error propagation.
+- **Live stats:** Monitor pool health and performance in real time.
+- **Resource efficient:** Idle worker auto-termination saves memory and CPU.
+
+---
+
+## 🚦 Features
+
+- 🧩 Simple API for parallelizing tasks
+- 🔗 Built on Comlink for ergonomic worker communication
+- 🦾 TypeScript support
+- ⚡ Configurable pool size & worker factory
+- 📈 Live stats and onUpdateStats callback
+- 💥 Full error propagation for seamless debugging
+- 💤 Idle worker auto-termination
+- 🔄 Automatic worker recovery
+- 🔒 Type-safe and ergonomic integration
+
+---
+
+## ⚡ Quick Start
+
+Install from your monorepo root:
 
 ```bash
 bun add comlink-worker-pool
+```
+
+Or with npm:
+
+```bash
+npm install comlink-worker-pool
 ```
 
 ## Usage
