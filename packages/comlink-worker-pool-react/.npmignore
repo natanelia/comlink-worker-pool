@@ -1,0 +1,22 @@
+# Ignore test files and configs
+src/**/*.test.*
+test/
+__mocks__/
+coverage/
+*.log
+*.spec.*
+
+# Ignore configs not needed in published package
+bunfig.toml
+bun.lock
+bunup.config.ts
+biome.json
+.vscode/
+tsconfig.json
+
+# Ignore playground/demo
+playground/
+
+# Ignore local env
+.env
+.env.*
