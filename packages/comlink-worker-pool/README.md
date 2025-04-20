@@ -5,9 +5,9 @@
 [![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Effortless parallelism for your Bun, React, and JS/TS apps.**
+**Effortless parallelism for your React and JS/TS apps.**
 
-A blazing-fast, ergonomic Web Worker pool library powered by [Comlink](https://github.com/GoogleChromeLabs/comlink) — designed for modern web and Bun projects. Offload CPU-intensive work to a pool of workers, maximize throughput, and keep your UI smooth.
+A blazing-fast, ergonomic Web Worker pool library powered by [Comlink](https://github.com/GoogleChromeLabs/comlink). Developed with Bun for fast builds and tests, but works in any modern JS/TS/React app. Offload CPU-intensive work to a pool of workers, maximize throughput, and keep your UI smooth.
 
 ---
 
@@ -15,7 +15,7 @@ A blazing-fast, ergonomic Web Worker pool library powered by [Comlink](https://g
 
 - **Supercharge performance:** Run heavy computations in parallel without blocking the main thread.
 - **Zero-hassle API:** Simple, type-safe, and ergonomic. No boilerplate.
-- **Bun & Browser Ready:** Works seamlessly in both environments.
+- **Easy to develop & test:** Built with Bun for development and CI, but no Bun dependency at runtime.
 - **Crash resilience:** Automatic worker recovery and error propagation.
 - **Live stats:** Monitor pool health and performance in real time.
 - **Resource efficient:** Idle worker auto-termination saves memory and CPU.

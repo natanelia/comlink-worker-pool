@@ -5,6 +5,8 @@
 
 **Interactive React demo for [comlink-worker-pool](../comlink-worker-pool/README.md) and [comlink-worker-pool-react](../comlink-worker-pool-react/README.md).**
 
+> **Note:** Bun is used to run the playground locally, but is not required for using the core libraries in your own project.
+
 > ⚡️ See worker pools in action — live, in your browser!
 
 ![Demo GIF](https://placehold.co/600x200?text=Demo+Coming+Soon)

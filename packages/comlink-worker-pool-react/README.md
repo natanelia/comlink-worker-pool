@@ -1,8 +1,7 @@
 # ⚛️ comlink-worker-pool-react
 
 [![npm version](https://img.shields.io/npm/v/comlink-worker-pool-react?color=blue)](https://www.npmjs.com/package/comlink-worker-pool-react)
-[![bun compatible](https://img.shields.io/badge/bun-%E2%9C%94%EF%B8%8F-green)](https://bun.sh/)
-[![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
+[![bun compatible](https://img.shields.io/badge/bun-%E2%9C%94%EF%B8%8F-green)](https://bun.sh/)[![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 
 **Effortless, scalable web worker pools for React.**
