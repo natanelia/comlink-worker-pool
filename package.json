@@ -1,5 +1,5 @@
 {
-	"name": "comlink-worker-pool-monorepo",
+	"name": "comlink-plus",
 	"scripts": {
 		"playground:lint": "bun run -F comlink-worker-pool-playground lint",
 		"playground:build": "bun run -F comlink-worker-pool-playground build",
