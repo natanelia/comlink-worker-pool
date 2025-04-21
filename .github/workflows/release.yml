@@ -34,3 +34,36 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: bunx changeset publish
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Aggregate all changelogs
+        id: changelogs
+        run: |
+          TAG_NAME=$(basename ${{ github.ref }})
+          VERSION=${TAG_NAME#v}
+          echo "Aggregating changelogs for version $VERSION..."
+          RELEASE_BODY=""
+          for file in $(find . -name CHANGELOG.md); do
+            PKG=$(dirname "$file")
+            TITLE="$(basename "$PKG")"
+            # Extract the latest entry for this version
+            ENTRY=$(awk "/^##? ?\\[?$VERSION\\]?/ {flag=1; next} /^##? /{flag=0} flag" "$file")
+            if [ -n "$ENTRY" ]; then
+              RELEASE_BODY+=$'\n\n### '$TITLE$'\n'"$ENTRY"
+            fi
+          done
+          if [ -z "$RELEASE_BODY" ]; then
+            RELEASE_BODY="No changelog entries found for this release."
+          fi
+          echo "$RELEASE_BODY" > RELEASE_BODY.md
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_BODY.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
