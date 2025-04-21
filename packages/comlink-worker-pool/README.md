@@ -5,6 +5,8 @@
 [![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-plus/)!**
+
 **Effortless parallelism for your React and JS/TS apps.**
 
 A blazing-fast, ergonomic Web Worker pool library powered by [Comlink](https://github.com/GoogleChromeLabs/comlink). Developed with Bun for fast builds and tests, but works in any modern JS/TS/React app. Offload CPU-intensive work to a pool of workers, maximize throughput, and keep your UI smooth.
@@ -131,11 +133,9 @@ export function fibAsync(n: number): number {
 
 ## Playground Demo
 
-A React playground demo is available in [`../playground`](../playground). To run it:
+Try the live playground demo here: [https://natanelia.github.io/comlink-plus/](https://natanelia.github.io/comlink-plus/)
 
-```bash
-bun run --filter playground dev
-```
+If you want to run it locally, see the [playground README](../playground/README.md).
 
 ## Troubleshooting
 

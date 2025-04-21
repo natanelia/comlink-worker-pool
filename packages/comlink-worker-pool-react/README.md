@@ -4,6 +4,8 @@
 [![bun compatible](https://img.shields.io/badge/bun-%E2%9C%94%EF%B8%8F-green)](https://bun.sh/)[![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 
+> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-plus/)!**
+
 **Effortless, scalable web worker pools for React.**
 
 Supercharge your React apps with parallelism and keep your UI buttery smooth. Powered by [comlink-worker-pool](../comlink-worker-pool/README.md) — now with a beautiful, idiomatic hook-based API for React developers.
@@ -92,7 +94,7 @@ return (
 );
 ```
 
-> 💡 **Tip:** See the `playground` directory for a full working example!
+> 💡 **Tip:** Try the [live playground demo](https://natanelia.github.io/comlink-plus/) for a full working example!
 
 ## Get Started Now!
 

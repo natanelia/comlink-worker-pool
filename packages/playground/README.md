@@ -3,6 +3,8 @@
 [![bun compatible](https://img.shields.io/badge/bun-%E2%9C%94%EF%B8%8F-green)](https://bun.sh/)
 [![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
 
+> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-plus/)!**
+
 **Interactive React demo for [comlink-worker-pool](../comlink-worker-pool/README.md) and [comlink-worker-pool-react](../comlink-worker-pool-react/README.md).**
 
 > **Note:** Bun is used to run the playground locally, but is not required for using the core libraries in your own project.
@@ -21,7 +23,7 @@ From the monorepo root:
 bun run --filter playground dev
 ```
 
-Then open [http://localhost:3000](http://localhost:3000) in your browser.
+Or try the live playground at: [https://natanelia.github.io/comlink-plus/](https://natanelia.github.io/comlink-plus/)
 
 ---
 

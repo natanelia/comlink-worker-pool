@@ -4,6 +4,8 @@
 [![CI](https://github.com/natanelia/comlink-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-plus/actions)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-plus/)!**
+
 **The modern monorepo for high-performance, ergonomic web worker pools in React, JS, and TypeScript — powered by Comlink.**
 
 ---
@@ -21,7 +23,7 @@
 
 - [**comlink-worker-pool**](./packages/comlink-worker-pool/README.md): Reusable, Comlink-based worker pool library for parallel processing
 - [**comlink-worker-pool-react**](./packages/comlink-worker-pool-react/README.md): React bindings for the worker pool, including the `useWorkerPool` hook
-- [**playground**](./packages/playground/README.md): Interactive React demo app showcasing the worker pool and React bindings
+- [**playground**](./packages/playground/README.md): Interactive React demo app showcasing the worker pool and React bindings ([Live playground](https://natanelia.github.io/comlink-plus/))
 
 ## 🚀 Quick Start (For Package Users)
 
