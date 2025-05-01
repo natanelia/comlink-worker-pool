@@ -61,9 +61,9 @@ import { WorkerPool } from "comlink-worker-pool";
 import * as Comlink from "comlink"; // or your Comlink import
 
 // Define your worker API interface
-interface WorkerApi {
+type WorkerApi = {
   fibAsync(n: number): Promise<number>;
-}
+};
 
 // Create the worker pool
 const pool = new WorkerPool<

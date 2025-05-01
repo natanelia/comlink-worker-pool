@@ -58,9 +58,9 @@ npm install comlink-worker-pool comlink-worker-pool-react
    import { WorkerPool } from "comlink-worker-pool";
    import * as Comlink from "comlink";
 
-   interface WorkerApi {
+   type WorkerApi = {
      fib(n: number): Promise<number>;
-   }
+   };
 
    const pool = new WorkerPool<
      { method: string; args: unknown[] },
