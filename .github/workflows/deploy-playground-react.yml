@@ -1,0 +1,27 @@
+name: Deploy React Playground
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+      - run: bun install --frozen-lockfile
+      # Ensure comlink-worker-pool (dependency for the react hook) and the react hook itself are built
+      - run: bun run -F comlink-worker-pool build
+      - run: bun run -F comlink-worker-pool-react build
+      # Build the React playground
+      - run: bun run -F @comlink-worker-pool/playground-react build
+      - name: Deploy React Playground to GitHub Pages
+        id: deployment-react-playground # Changed ID as requested
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./packages/playground-react/dist # Updated publish_dir
+          repository: natanelia/comlink-plus # This should ideally be dynamic or checked if it's correct
