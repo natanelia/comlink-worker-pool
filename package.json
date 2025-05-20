@@ -4,6 +4,7 @@
 		"playground:lint": "bun run -F comlink-worker-pool-playground lint",
 		"playground:build": "bun run -F comlink-worker-pool-playground build",
 		"playground:dev": "bun run -F comlink-worker-pool-playground dev",
+		"dev:react-playground": "bun --filter @comlink-worker-pool/playground-react dev",
 		"lint": "bun run -F comlink-worker-pool-react -F comlink-worker-pool lint",
 		"build": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
 		"build:watch": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",

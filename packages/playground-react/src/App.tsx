@@ -1,5 +1,6 @@
 import * as Comlink from "comlink";
-import { WorkerPool, type WorkerPoolStats } from "comlink-worker-pool";
+import { useWorkerPool } from "comlink-worker-pool-react";
+import type { WorkerPoolStats } from "comlink-worker-pool";
 import { useEffect, useRef, useState } from "react";
 import "./index.css";
 
@@ -15,7 +16,6 @@ type WorkerApi = {
 const proxyFactory = (worker: Worker) => Comlink.wrap<WorkerApi>(worker);
 
 function App() {
-	const [pool, setPool] = useState<WorkerPool<WorkerApi> | null>(null);
 	const [inputNumber, setInputNumber] = useState(40);
 	const [taskCount, setTaskCount] = useState(10);
 	const [inputText, setInputText] = useState("");
@@ -23,28 +23,11 @@ function App() {
 	const [logs, setLogs] = useState<{ key: string; text: string }[]>([]);
 	const logsListRef = useRef<HTMLUListElement>(null);
 
-	useEffect(() => {
-		const size = navigator.hardwareConcurrency || 4;
-		const p = new WorkerPool<WorkerApi>({
-			size,
-			workerFactory,
-			proxyFactory,
-			onUpdateStats: setStats,
-			workerIdleTimeoutMs: 1000,
-		});
-		setPool(p);
-		setStats(p.getStats());
-		return () => {
-			p.terminateAll();
-		};
-	}, []);
-
-	const [stats, setStats] = useState<WorkerPoolStats>({
-		size: 0,
-		available: 0,
-		queue: 0,
-		workers: 0,
-		idleWorkers: 0,
+	const { pool, stats, setStats } = useWorkerPool<WorkerApi>({
+		size: navigator.hardwareConcurrency || 4,
+		workerFactory,
+		proxyFactory,
+		workerIdleTimeoutMs: 1000,
 	});
 
 	// Utility to format log messages
@@ -138,31 +121,31 @@ function App() {
 						<div className="flex flex-col items-center min-w-[70px]">
 							<span className="text-xs text-organic-300">Workers</span>
 							<span className="text-xl font-bold text-organic-300">
-								{stats.size}
+								{stats?.size ?? 0}
 							</span>
 						</div>
 						<div className="flex flex-col items-center min-w-[70px]">
 							<span className="text-xs text-organic-300">Available</span>
 							<span className="text-xl font-bold text-organic-300">
-								{stats.available}
+								{stats?.available ?? 0}
 							</span>
 						</div>
 						<div className="flex flex-col items-center min-w-[70px]">
 							<span className="text-xs text-organic-300">Queue</span>
 							<span className="text-xl font-bold text-organic-300">
-								{stats.queue}
+								{stats?.queue ?? 0}
 							</span>
 						</div>
 						<div className="flex flex-col items-center min-w-[70px]">
 							<span className="text-xs text-organic-300">Active Workers</span>
 							<span className="text-lg font-bold text-organic-300">
-								{stats.workers}
+								{stats?.workers ?? 0}
 							</span>
 						</div>
 						<div className="flex flex-col items-center min-w-[70px]">
 							<span className="text-xs text-organic-300">Idle Workers</span>
 							<span className="text-lg font-bold text-organic-300">
-								{stats.idleWorkers}
+								{stats?.idleWorkers ?? 0}
 							</span>
 						</div>
 					</div>

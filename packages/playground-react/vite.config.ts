@@ -1,3 +1,4 @@
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -8,8 +9,7 @@ export default defineConfig({
 	},
 	server: {
 		open: true,
-		port: 5173, // Default port for the non-React playground
+		port: 5174,
 	},
-	// No React-specific plugins needed for the vanilla JS playground
-	plugins: [],
+	plugins: [react()],
 });

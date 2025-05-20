@@ -1,12 +1,80 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Comlink Worker Pool Playground</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Comlink Worker Pool - Vanilla JS Playground</title>
+  <script type="module" src="/src/main.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 20px; background-color: #f0f0f0; }
+    .container { max-width: 800px; margin: auto; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+    h1 { text-align: center; color: #333; }
+    .controls, .stats, .logs { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
+    .controls h2, .stats h2, .logs h2 { margin-top: 0; color: #555; }
+    label { display: block; margin-bottom: 5px; font-weight: bold; }
+    input[type="number"], input[type="text"] { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 10px 15px; margin-right: 10px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    button:hover { background-color: #0056b3; }
+    #logsContainer { max-height: 300px; overflow-y: auto; background-color: #f9f9f9; padding: 10px; border: 1px solid #eee; }
+    .log-entry { margin-bottom: 5px; font-family: monospace; font-size: 0.9em; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; }
+    .stat-item { background-color: #e9ecef; padding: 10px; border-radius: 4px; text-align: center; }
+    .stat-item .label { font-size: 0.8em; color: #666; }
+    .stat-item .value { font-size: 1.2em; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Comlink Worker Pool - Vanilla JS Playground</h1>
+
+    <div class="controls">
+      <h2>Controls</h2>
+      <div>
+        <label for="taskCount">Tasks (parallel for all actions):</label>
+        <input type="number" id="taskCount" value="10" min="1" max="100">
+      </div>
+    </div>
+
+    <div class="stats">
+      <h2>Worker Pool Stats</h2>
+      <div class="stats-grid">
+        <div class="stat-item"><span class="label">Pool Size</span><div id="statSize" class="value">0</div></div>
+        <div class="stat-item"><span class="label">Available</span><div id="statAvailable" class="value">0</div></div>
+        <div class="stat-item"><span class="label">Queue</span><div id="statQueue" class="value">0</div></div>
+        <div class="stat-item"><span class="label">Active Workers</span><div id="statWorkers" class="value">0</div></div>
+        <div class="stat-item"><span class="label">Idle Workers</span><div id="statIdleWorkers" class="value">0</div></div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <h2>Fibonacci Calculator</h2>
+      <label for="fibInput">Number (n):</label>
+      <input type="number" id="fibInput" value="40" min="1" max="100">
+      <button id="runFib">Calculate Fib (n)</button>
+    </div>
+
+    <div class="controls">
+      <h2>Word Counter</h2>
+      <label for="wordCountInput">Input Text:</label>
+      <input type="text" id="wordCountInput" placeholder="Type a sentence or paragraph...">
+      <button id="runCountWords">Count Words</button>
+    </div>
+
+    <div class="controls">
+      <h2>String Reverser</h2>
+      <label for="reverseStringInput">Input Text:</label>
+      <input type="text" id="reverseStringInput" placeholder="Type text to reverse...">
+      <button id="runReverseString">Reverse String</button>
+    </div>
+
+    <div class="logs">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2>Logs</h2>
+        <button id="clearLogs">Clear Logs</button>
+      </div>
+      <div id="logsContainer"></div>
+    </div>
+  </div>
+</body>
 </html>
