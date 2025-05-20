@@ -8,17 +8,12 @@
 		"lint": "biome check ."
 	},
 	"dependencies": {
-		"react": "^19.1.0",
-		"react-dom": "^19.1.0",
 		"comlink": "^4.4.2",
 		"comlink-worker-pool": "workspace:packages/comlink-worker-pool"
 	},
 	"devDependencies": {
 		"@tailwindcss/postcss": "^4.1.4",
 		"@types/bun": "^1.2.10",
-		"@types/react": "^19.1.2",
-		"@types/react-dom": "^19.1.2",
-		"@vitejs/plugin-react": "^4.4.1",
 		"autoprefixer": "^10.4.21",
 		"oxlint": "^0.16.6",
 		"postcss": "^8.5.3",
