@@ -1,23 +1,29 @@
 {
-	"name": "comlink-plus",
-	"scripts": {
-		"playground:lint": "bun run -F comlink-worker-pool-playground lint",
-		"playground:build": "bun run -F comlink-worker-pool-playground build",
-		"playground:dev": "bun run -F comlink-worker-pool-playground dev",
-		"lint": "bun run -F comlink-worker-pool-react -F comlink-worker-pool lint",
-		"build": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
-		"build:watch": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
-		"test": "bun run -F comlink-worker-pool-react -F comlink-worker-pool test"
-	},
-	"private": true,
-	"workspaces": [
-		"packages/comlink-worker-pool",
-		"packages/playground",
-		"packages/comlink-worker-pool-react"
-	],
-	"devDependencies": {
-		"@biomejs/biome": "1.9.4",
-		"@changesets/cli": "^2.29.2"
-	},
-	"trustedDependencies": ["@biomejs/biome"]
+  "name": "comlink-plus",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/natanelia/comlink-plus.git"
+  },
+  "scripts": {
+    "playground:lint": "bun run -F comlink-worker-pool-playground lint",
+    "playground:build": "bun run -F comlink-worker-pool-playground build",
+    "playground:dev": "bun run -F comlink-worker-pool-playground dev",
+    "lint": "bun run -F comlink-worker-pool-react -F comlink-worker-pool lint",
+    "build": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
+    "build:watch": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
+    "test": "bun run -F comlink-worker-pool-react -F comlink-worker-pool test"
+  },
+  "private": true,
+  "workspaces": [
+    "packages/comlink-worker-pool",
+    "packages/playground",
+    "packages/comlink-worker-pool-react"
+  ],
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@changesets/cli": "^2.29.2"
+  },
+  "trustedDependencies": [
+    "@biomejs/biome"
+  ]
 }
