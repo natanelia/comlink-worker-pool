@@ -35,6 +35,7 @@ A blazing-fast, ergonomic Web Worker pool library powered by [Comlink](https://g
 - 💤 Idle worker auto-termination
 - 🔄 Automatic worker recovery
 - 🔒 Type-safe and ergonomic integration
+- ⏱️ **Worker lifecycle management** - Terminate workers based on task count or lifetime duration
 
 ---
 
@@ -77,6 +78,8 @@ const pool = new WorkerPool<
   proxyFactory: (worker) => Comlink.wrap<WorkerApi>(worker),
   onUpdateStats: (stats) => console.log("Pool stats:", stats),
   workerIdleTimeoutMs: 30000, // Optional: terminate idle workers after 30s
+  maxTasksPerWorker: 100, // Optional: terminate workers after 100 tasks
+  maxWorkerLifetimeMs: 5 * 60 * 1000, // Optional: terminate workers after 5 minutes
 });
 
 // Use the API proxy for ergonomic calls
@@ -97,6 +100,8 @@ console.log(pool.getStats());
 | `proxyFactory`        | `(worker: Worker) => P`            | Factory to wrap a worker with Comlink or similar |
 | `onUpdateStats`       | `(stats: WorkerPoolStats) => void` | Callback on pool stats update (optional)         |
 | `workerIdleTimeoutMs` | `number`                           | Idle timeout for terminating workers (optional)  |
+| `maxTasksPerWorker`   | `number`                           | Max tasks per worker before termination (optional) |
+| `maxWorkerLifetimeMs` | `number`                           | Max worker lifetime in milliseconds (optional)   |
 
 ### Advanced Usage
 
@@ -104,6 +109,45 @@ console.log(pool.getStats());
   - `T`: Task type (must be `{ method: string; args: unknown[] }` for proxy mode)
   - `R`: Result type
   - `P`: Proxy type (your worker API interface)
+
+### Worker Lifecycle Management
+
+The WorkerPool supports automatic worker termination based on different criteria to prevent memory leaks and ensure optimal performance:
+
+#### Task-Based Termination (`maxTasksPerWorker`)
+```ts
+const pool = new WorkerPool<WorkerApi>({
+  // ... other options
+  maxTasksPerWorker: 100, // Terminate workers after 100 tasks
+});
+```
+- Prevents memory leaks from long-running workers
+- Ensures fresh worker state periodically
+- Useful for workers that accumulate state over time
+
+#### Time-Based Termination (`maxWorkerLifetimeMs`)
+```ts
+const pool = new WorkerPool<WorkerApi>({
+  // ... other options
+  maxWorkerLifetimeMs: 5 * 60 * 1000, // Terminate workers after 5 minutes
+});
+```
+- Limits worker lifetime to prevent resource accumulation
+- Useful for workers that may develop memory leaks over time
+- Ensures periodic refresh of worker processes
+
+#### Idle Termination (`workerIdleTimeoutMs`)
+```ts
+const pool = new WorkerPool<WorkerApi>({
+  // ... other options
+  workerIdleTimeoutMs: 30 * 1000, // Terminate idle workers after 30 seconds
+});
+```
+- Reduces resource usage when demand is low
+- Workers are recreated on-demand when needed
+- Helps with memory management in variable-load scenarios
+
+All lifecycle management options can be combined for comprehensive worker management.
 
 ## Example Worker
 

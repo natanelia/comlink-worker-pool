@@ -7,6 +7,9 @@ const api = {
 	fail() {
 		throw new Error("fail");
 	},
+	delay(ms: number) {
+		return new Promise<void>((resolve) => setTimeout(resolve, ms));
+	},
 };
 
 Comlink.expose(api);

@@ -1,9 +1,9 @@
 {
   "name": "comlink-worker-pool-react",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "repository": {
     "type": "git",
-    "url": "https://github.com/natanelia/comlink-plus.git"
+    "url": "git+https://github.com/natanelia/comlink-plus.git"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
