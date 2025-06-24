@@ -1,6 +1,6 @@
 {
   "name": "comlink-worker-pool-react",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/natanelia/comlink-plus.git"
@@ -21,7 +21,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "comlink": "^4.4.2",
-    "comlink-worker-pool": "workspace:packages/comlink-worker-pool"
+    "comlink-worker-pool": "workspace:*"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^17.4.4",
