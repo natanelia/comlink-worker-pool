@@ -68,6 +68,7 @@ npm install comlink-worker-pool comlink-worker-pool-react
      WorkerApi
    >({
      size: 2,
+     maxConcurrentTasksPerWorker: 3, // NEW: Allow concurrent tasks per worker
      workerFactory: () =>
        new Worker(new URL("./worker.ts", import.meta.url), { type: "module" }),
      proxyFactory: (worker) => Comlink.wrap<WorkerApi>(worker),

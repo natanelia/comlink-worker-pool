@@ -36,6 +36,7 @@ A blazing-fast, ergonomic Web Worker pool library powered by [Comlink](https://g
 - 🔄 Automatic worker recovery
 - 🔒 Type-safe and ergonomic integration
 - ⏱️ **Worker lifecycle management** - Terminate workers based on task count or lifetime duration
+- 🚀 **Concurrent task execution** - Run multiple tasks concurrently on the same worker for I/O-bound operations
 
 ---
 
@@ -93,15 +94,16 @@ console.log(pool.getStats());
 
 ## WorkerPool Options
 
-| Option                | Type                               | Description                                      |
-| --------------------- | ---------------------------------- | ------------------------------------------------ |
-| `size`                | `number`                           | Number of workers in the pool                    |
-| `workerFactory`       | `() => Worker`                     | Factory function to create new workers           |
-| `proxyFactory`        | `(worker: Worker) => P`            | Factory to wrap a worker with Comlink or similar |
-| `onUpdateStats`       | `(stats: WorkerPoolStats) => void` | Callback on pool stats update (optional)         |
-| `workerIdleTimeoutMs` | `number`                           | Idle timeout for terminating workers (optional)  |
-| `maxTasksPerWorker`   | `number`                           | Max tasks per worker before termination (optional) |
-| `maxWorkerLifetimeMs` | `number`                           | Max worker lifetime in milliseconds (optional)   |
+| Option                        | Type                               | Description                                      |
+| ----------------------------- | ---------------------------------- | ------------------------------------------------ |
+| `size`                        | `number`                           | Number of workers in the pool                    |
+| `workerFactory`               | `() => Worker`                     | Factory function to create new workers           |
+| `proxyFactory`                | `(worker: Worker) => P`            | Factory to wrap a worker with Comlink or similar |
+| `onUpdateStats`               | `(stats: WorkerPoolStats) => void` | Callback on pool stats update (optional)         |
+| `workerIdleTimeoutMs`         | `number`                           | Idle timeout for terminating workers (optional)  |
+| `maxTasksPerWorker`           | `number`                           | Max tasks per worker before termination (optional) |
+| `maxWorkerLifetimeMs`         | `number`                           | Max worker lifetime in milliseconds (optional)   |
+| `maxConcurrentTasksPerWorker` | `number`                           | Max concurrent tasks per worker (optional, defaults to 1) |
 
 ### Advanced Usage
 
@@ -149,6 +151,75 @@ const pool = new WorkerPool<WorkerApi>({
 
 All lifecycle management options can be combined for comprehensive worker management.
 
+### Concurrent Task Execution
+
+By default, each worker processes tasks sequentially (one at a time). However, you can configure workers to handle multiple tasks concurrently, which is especially beneficial for I/O-bound operations or tasks that involve waiting.
+
+#### Basic Concurrent Execution
+
+```ts
+const pool = new WorkerPool<WorkerApi>({
+  size: 2,
+  maxConcurrentTasksPerWorker: 3, // Allow up to 3 concurrent tasks per worker
+  workerFactory: () => new Worker(new URL("./worker.ts", import.meta.url)),
+  proxyFactory: (worker) => Comlink.wrap<WorkerApi>(worker),
+});
+
+// These 6 tasks will run on 2 workers, with up to 3 tasks per worker concurrently
+const results = await Promise.all([
+  api.fetchData("url1"),  // Worker 1, Task 1
+  api.fetchData("url2"),  // Worker 1, Task 2  
+  api.fetchData("url3"),  // Worker 1, Task 3
+  api.fetchData("url4"),  // Worker 2, Task 1
+  api.fetchData("url5"),  // Worker 2, Task 2
+  api.fetchData("url6"),  // Worker 2, Task 3
+]);
+```
+
+#### When to Use Concurrent Execution
+
+**✅ Good for:**
+- I/O-bound operations (network requests, file operations)
+- Tasks with async waiting periods
+- Database queries
+- API calls
+
+**❌ Avoid for:**
+- CPU-intensive computations (use more workers instead)
+- Tasks that compete for the same resources
+- Memory-intensive operations
+
+#### Performance Considerations
+
+```ts
+// For I/O-bound tasks: Higher concurrency can improve throughput
+const ioPool = new WorkerPool<ApiWorker>({
+  size: 2,
+  maxConcurrentTasksPerWorker: 10, // High concurrency for I/O
+  // ...
+});
+
+// For CPU-bound tasks: Use more workers instead of concurrency
+const cpuPool = new WorkerPool<ComputeWorker>({
+  size: navigator.hardwareConcurrency || 4, // More workers
+  maxConcurrentTasksPerWorker: 1, // Sequential processing (default)
+  // ...
+});
+```
+
+#### Updated Statistics
+
+When using concurrent execution, the pool statistics include additional information:
+
+```ts
+const stats = pool.getStats();
+console.log({
+  runningTasks: stats.runningTasks, // Total tasks currently executing
+  availableForConcurrency: stats.availableForConcurrency, // Workers that can accept more tasks
+  // ... other existing stats
+});
+```
+
 ## Example Worker
 
 ```ts
@@ -163,6 +234,25 @@ export function fibAsync(n: number): number {
 - `getApi(): P` — Returns a proxy for calling worker methods as if local (recommended).
 - `getStats(): WorkerPoolStats` — Returns live stats about the pool.
 - `terminateAll(): void` — Terminates all workers and clears the pool.
+
+### WorkerPoolStats Interface
+
+```ts
+interface WorkerPoolStats {
+  size: number;                    // Configured maximum number of workers
+  available: number;               // Workers available to take new tasks
+  queue: number;                   // Tasks waiting in the queue
+  workers: number;                 // Currently instantiated workers
+  idleWorkers: number;             // Workers with no running tasks
+  runningTasks: number;            // Total tasks currently executing
+  availableForConcurrency: number; // Workers that can accept additional concurrent tasks
+}
+```
+
+**Key differences with concurrent execution:**
+- `idleWorkers`: Workers with zero running tasks
+- `runningTasks`: Total count of all executing tasks across all workers
+- `availableForConcurrency`: Workers that haven't reached their `maxConcurrentTasksPerWorker` limit
 
 ## Development
 
@@ -183,7 +273,6 @@ If you want to run it locally, see the [playground README](../playground/README.
 
 ## Troubleshooting
 
-- Ensure you are running with Bun v1.0.0+.
 - Worker file paths must be valid URLs relative to the importing module.
 - If you encounter module resolution issues in the playground, try rebuilding the worker pool package.
 

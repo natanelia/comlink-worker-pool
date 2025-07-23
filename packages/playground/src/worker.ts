@@ -32,7 +32,38 @@ export async function reverseString(text: string): Promise<string> {
 	return text.split("").reverse().join("");
 }
 
-const api = { fibAsync, countWords, reverseString };
+// New I/O-bound functions to demonstrate concurrent execution
+export async function fetchData(url: string, delay: number = 1000): Promise<string> {
+	// Simulate network request delay
+	await sleep(delay);
+	if (typeof url !== "string") throw new Error("URL must be a string");
+	
+	// Simulate different response types based on URL
+	if (url.includes("api.example.com")) {
+		return `Mock data from ${url} (${delay}ms delay)`;
+	} else if (url.includes("jsonplaceholder")) {
+		return `JSON response from ${url} (${delay}ms delay)`;
+	} else {
+		return `Generic response from ${url} (${delay}ms delay)`;
+	}
+}
+
+export async function processData(data: string, delay: number = 500): Promise<string> {
+	// Simulate data processing delay
+	await sleep(delay);
+	if (typeof data !== "string") throw new Error("Data must be a string");
+	
+	// Simulate processing operations
+	const processed = data
+		.toUpperCase()
+		.split(" ")
+		.map(word => `[${word}]`)
+		.join(" ");
+	
+	return `Processed: ${processed} (took ${delay}ms)`;
+}
+
+const api = { fibAsync, countWords, reverseString, fetchData, processData };
 export type WorkerApi = typeof api;
 
 Comlink.expose(api);

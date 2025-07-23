@@ -26,6 +26,8 @@ describe("WorkerPool", () => {
 		queue: number;
 		idleWorkers: number;
 		workers: number;
+		runningTasks: number;
+		availableForConcurrency: number;
 	};
 
 	function comlinkProxyFactory(worker: Worker): WorkerApi {
@@ -183,6 +185,8 @@ describe("WorkerPool", () => {
 			queue: 0,
 			idleWorkers: 0,
 			workers: 0,
+			runningTasks: 0,
+			availableForConcurrency: 0,
 		});
 	});
 

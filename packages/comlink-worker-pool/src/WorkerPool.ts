@@ -26,9 +26,17 @@ export interface WorkerPoolStats {
    */
   workers: number;
   /**
-   * Number of workers currently idle.
+   * Number of workers currently idle (no running tasks).
    */
   idleWorkers: number;
+  /**
+   * Total number of tasks currently running across all workers.
+   */
+  runningTasks: number;
+  /**
+   * Number of workers that can accept additional concurrent tasks.
+   */
+  availableForConcurrency: number;
 }
 
 /**
@@ -91,6 +99,12 @@ export interface WorkerPoolOptions<
    * Worker will be terminated after completing its current task when this time is exceeded.
    */
   maxWorkerLifetimeMs?: number;
+  /**
+   * Optional maximum number of concurrent tasks per worker (defaults to 1).
+   * Set to a higher value to allow multiple tasks to run concurrently on the same worker.
+   * This can improve throughput for I/O-bound or async operations.
+   */
+  maxConcurrentTasksPerWorker?: number;
 }
 
 /**
@@ -102,6 +116,8 @@ interface WorkerMetadata<TProxy = any> {
   worker: Worker;
   taskCount: number;
   createdAt: number;
+  runningTasks: number;
+  markedForTermination?: boolean;
 }
 
 /**
@@ -175,6 +191,11 @@ export class WorkerPool<
   private maxWorkerLifetimeMs?: number;
 
   /**
+   * Maximum number of concurrent tasks per worker.
+   */
+  private maxConcurrentTasksPerWorker: number;
+
+  /**
    * Map of idle timers for each worker.
    */
   private idleTimers: Map<number, ReturnType<typeof setTimeout>> = new Map();
@@ -198,6 +219,8 @@ export class WorkerPool<
       worker,
       taskCount: 0,
       createdAt: Date.now(),
+      runningTasks: 0,
+      markedForTermination: false,
     };
 
     const handleCrash = (_event: Event | ErrorEvent) => {
@@ -236,6 +259,12 @@ export class WorkerPool<
     this.workerIdleTimeoutMs = options.workerIdleTimeoutMs;
     this.maxTasksPerWorker = options.maxTasksPerWorker;
     this.maxWorkerLifetimeMs = options.maxWorkerLifetimeMs;
+    this.maxConcurrentTasksPerWorker = options.maxConcurrentTasksPerWorker ?? 1;
+    
+    if (this.maxConcurrentTasksPerWorker < 1) {
+      throw new Error("maxConcurrentTasksPerWorker must be at least 1");
+    }
+    
     this.executeTask = (proxy: TProxy, task: TTask) => {
       return proxy[task.method](...task.args) as Promise<TResult>;
     };
@@ -272,17 +301,18 @@ export class WorkerPool<
   }
 
   /**
-   * Gets an available worker, creating a new one if necessary.
+   * Gets an available worker that can accept more tasks, creating a new one if necessary.
    */
   private _getAvailableWorker(): WorkerMetadata<TProxy> | null {
-    if (this.idle.length > 0) {
-      const worker = this.idle.shift();
-      if (worker) {
-        this._clearIdleTimer(worker.id);
+    // First, try to find an existing worker that can accept more concurrent tasks
+    // and is not marked for termination
+    for (const worker of this.workers) {
+      if (worker.runningTasks < this.maxConcurrentTasksPerWorker && !worker.markedForTermination) {
         return worker;
       }
     }
 
+    // If no existing worker can accept more tasks, create a new one if possible
     if (this.workers.length < this.size) {
       const id = this._getNextWorkerId();
       const workerObj = this._createWorkerWithCrashHandler(id);
@@ -297,32 +327,48 @@ export class WorkerPool<
    * Executes the next task in the queue.
    */
   private _next() {
-    while (
-      this.queue.length > 0 &&
-      (this.idle.length > 0 || this.workers.length < this.size)
-    ) {
+    while (this.queue.length > 0) {
       const workerObj = this._getAvailableWorker();
-      if (!workerObj) continue;
+      if (!workerObj) break; // No available workers
 
       const queueItem = this.queue.shift();
       if (!queueItem) return;
 
       const { task, resolve, reject } = queueItem;
+      
+      // Increment running tasks count before starting
+      workerObj.runningTasks++;
+      
+      // Remove from idle if this was the first task for this worker
+      if (workerObj.runningTasks === 1) {
+        const idleIndex = this.idle.findIndex(w => w.id === workerObj.id);
+        if (idleIndex !== -1) {
+          this.idle.splice(idleIndex, 1);
+          this._clearIdleTimer(workerObj.id);
+        }
+      }
+
       this.executeTask(workerObj.proxy, task)
         .then((result: TResult) => resolve(result))
         .catch((err: unknown) => reject(err))
         .finally(() => {
-          // Increment task count
+          // Decrement running tasks count
+          workerObj.runningTasks--;
+          // Increment total task count
           workerObj.taskCount++;
 
           // Check if worker should be terminated due to lifecycle limits
           if (this._shouldTerminateWorker(workerObj)) {
-            // Schedule termination after a delay to allow Comlink cleanup
-            setTimeout(() => {
-              this._terminateWorker(workerObj.id);
-              this._updateStats();
-            }); // Increased delay for better Comlink cleanup
-          } else {
+            workerObj.markedForTermination = true;
+            // Only terminate if no tasks are running
+            if (workerObj.runningTasks === 0) {
+              setTimeout(() => {
+                this._terminateWorker(workerObj.id);
+                this._updateStats();
+              }, 10); // Small delay for Comlink cleanup
+            }
+          } else if (workerObj.runningTasks === 0) {
+            // Worker is now idle, add to idle list
             this.idle.push(workerObj);
             this._startIdleTimer(workerObj.id);
           }
@@ -330,6 +376,7 @@ export class WorkerPool<
           this._updateStats();
           this._next();
         });
+      
       this._updateStats();
     }
   }
@@ -345,11 +392,17 @@ export class WorkerPool<
 
   /**
    * Checks if a worker should be terminated based on lifecycle limits.
+   * Only terminates workers that have no running tasks.
    *
    * @param workerObj The worker metadata to check.
    * @returns True if the worker should be terminated.
    */
   private _shouldTerminateWorker(workerObj: WorkerMetadata<TProxy>): boolean {
+    // Don't terminate workers with running tasks
+    if (workerObj.runningTasks > 0) {
+      return false;
+    }
+
     // Check task count limit
     if (
       this.maxTasksPerWorker &&
@@ -375,17 +428,23 @@ export class WorkerPool<
    * @param id The worker ID to terminate.
    */
   private _terminateWorker(id: number): void {
+    // Find the worker
+    const workerIndex = this.workers.findIndex((obj) => obj.id === id);
+    if (workerIndex === -1) return;
+
+    const workerObj = this.workers[workerIndex];
+    
+    // Don't terminate workers with running tasks
+    if (workerObj.runningTasks > 0) {
+      return;
+    }
+
     // Remove from idle if present
     this.idle = this.idle.filter((obj) => obj.id !== id);
 
-    // Find and terminate the worker
-    const workerIndex = this.workers.findIndex((obj) => obj.id === id);
-    if (workerIndex !== -1) {
-      const workerObj = this.workers[workerIndex];
-      // Terminate the worker immediately to prevent further use
-      workerObj.worker.terminate();
-      this.workers.splice(workerIndex, 1);
-    }
+    // Terminate the worker immediately to prevent further use
+    workerObj.worker.terminate();
+    this.workers.splice(workerIndex, 1);
 
     // Clear idle timer if exists
     this._clearIdleTimer(id);
@@ -423,14 +482,25 @@ export class WorkerPool<
    * Returns the current statistics of the worker pool.
    */
   public getStats(): WorkerPoolStats {
-    // available: how many workers could take work, even if not all are created yet
-    const available = this.idle.length + (this.size - this.workers.length);
+    // Calculate total running tasks across all workers
+    const runningTasks = this.workers.reduce((sum, worker) => sum + worker.runningTasks, 0);
+    
+    // Calculate workers that can accept additional concurrent tasks
+    const availableForConcurrency = this.workers.filter(
+      worker => worker.runningTasks < this.maxConcurrentTasksPerWorker
+    ).length;
+    
+    // Available capacity includes workers that can accept more tasks + potential new workers
+    const available = availableForConcurrency + (this.size - this.workers.length);
+    
     return {
       size: this.size,
       available,
       queue: this.queue.length,
       workers: this.workers.length,
       idleWorkers: this.idle.length,
+      runningTasks,
+      availableForConcurrency,
     };
   }
 
