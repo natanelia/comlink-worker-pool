@@ -363,15 +363,16 @@ export class WorkerPool<
 					// Check if worker should be terminated due to lifecycle limits
 					if (this._shouldTerminateWorker(workerObj)) {
 						workerObj.markedForTermination = true;
-						// Only terminate if no tasks are running
-						if (workerObj.runningTasks === 0) {
-							setTimeout(() => {
-								this._terminateWorker(workerObj.id);
-								this._updateStats();
-							}, 10); // Small delay for Comlink cleanup
-						}
-					} else if (workerObj.runningTasks === 0) {
-						// Worker is now idle, add to idle list
+					}
+
+					// Only terminate if no tasks are running and worker is marked for termination
+					if (workerObj.markedForTermination && workerObj.runningTasks === 0) {
+						setTimeout(() => {
+							this._terminateWorker(workerObj.id);
+							this._updateStats();
+						}, 10); // Small delay for Comlink cleanup
+					} else if (workerObj.runningTasks === 0 && !workerObj.markedForTermination) {
+						// Worker is now idle and not marked for termination, add to idle list
 						this.idle.push(workerObj);
 						this._startIdleTimer(workerObj.id);
 					}
@@ -401,17 +402,17 @@ export class WorkerPool<
 	 * @returns True if the worker should be terminated.
 	 */
 	private _shouldTerminateWorker(workerObj: WorkerMetadata<TProxy>): boolean {
-		// Don't terminate workers with running tasks
-		if (workerObj.runningTasks > 0) {
-			return false;
-		}
-
-		// Check task count limit
+		// Check task count limit first - mark for termination even if tasks are still running
 		if (
 			this.maxTasksPerWorker &&
 			workerObj.taskCount >= this.maxTasksPerWorker
 		) {
 			return true;
+		}
+
+		// Don't terminate workers with running tasks for lifetime limits
+		if (workerObj.runningTasks > 0) {
+			return false;
 		}
 
 		// Check lifetime limit

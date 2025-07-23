@@ -7,6 +7,7 @@ type WorkerApi = {
 	echo(x: string): Promise<string>;
 	fail(): Promise<never>;
 	delay(ms: number): Promise<void>;
+	delayAndReturn(ms: number, value: string): Promise<string>;
 };
 
 describe("WorkerPool", () => {
@@ -36,6 +37,7 @@ describe("WorkerPool", () => {
 			echo: (x: string) => base.echo(x),
 			fail: () => base.fail(),
 			delay: (ms: number) => base.delay(ms),
+			delayAndReturn: (ms: number, value: string) => base.delayAndReturn(ms, value),
 		};
 	}
 
@@ -459,6 +461,65 @@ describe("WorkerPool", () => {
 		expect(workerCreationCount).toBeLessThanOrEqual(2);
 
 		// Clean up
+		pool.terminateAll();
+	});
+
+	test("worker marked for termination after maxTasksPerWorker with concurrent tasks", async () => {
+		let workerCreationCount = 0;
+		let workerTerminationCount = 0;
+
+		const pool = new WorkerPool({
+			size: 2, // Allow 2 workers
+			maxTasksPerWorker: 2, // Terminate after 2 tasks
+			maxConcurrentTasksPerWorker: 3, // Allow 3 concurrent tasks
+			workerFactory: () => {
+				workerCreationCount++;
+				const worker = createTestWorker();
+				
+				// Track termination
+				const originalTerminate = worker.terminate.bind(worker);
+				worker.terminate = () => {
+					workerTerminationCount++;
+					return originalTerminate();
+				};
+				
+				return worker;
+			},
+			proxyFactory: comlinkProxyFactory,
+		});
+
+		const api = pool.getApi();
+
+		// Start 3 concurrent tasks on worker 1
+		const concurrentTasks = [
+			api.delayAndReturn(50, "task1"), // Completes first
+			api.delayAndReturn(100, "task2"), // Completes second (triggers maxTasksPerWorker)
+			api.delayAndReturn(200, "task3"), // Completes third (worker should be marked for termination after task2)
+		];
+
+		// Wait for first 2 tasks to complete (worker should be marked for termination)
+		await new Promise((resolve) => setTimeout(resolve, 120));
+
+		// Add a new task while task3 is still running
+		// This should go to a new worker, not the original worker
+		const newTaskPromise = api.echo("new_task");
+
+		// Wait for all tasks to complete
+		const [concurrentResults, newTaskResult] = await Promise.all([
+			Promise.all(concurrentTasks),
+			newTaskPromise,
+		]);
+
+		expect(concurrentResults).toEqual(["task1", "task2", "task3"]);
+		expect(newTaskResult).toBe("new_task");
+
+		// Wait for cleanup
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
+		// Verify behavior: should have created 2 workers and terminated 1
+		expect(workerCreationCount).toBe(2); // Should have created 2 workers total
+		expect(workerTerminationCount).toBe(1); // First worker should be terminated
+
 		pool.terminateAll();
 	});
 

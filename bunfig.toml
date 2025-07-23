@@ -3,5 +3,8 @@
 [run]
 main = "playground/index.html"
 
+[test]
+preload = "./packages/comlink-worker-pool-react/test/setup.ts"
+
 [workspace]
 children = ["packages/comlink-worker-pool", "packages/playground", "packages/comlink-worker-pool-react"]
