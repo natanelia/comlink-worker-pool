@@ -20,4 +20,4 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./packages/playground/dist
-          repository: natanelia/comlink-plus
+          repository: natanelia/comlink-worker-pool

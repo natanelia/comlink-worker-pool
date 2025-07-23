@@ -1,16 +1,16 @@
-# ⚡️ comlink-plus Monorepo
+# ⚡️ comlink-worker-pool Monorepo
 
 [![bun compatible](https://img.shields.io/badge/bun-%E2%9C%94%EF%B8%8F-green)](https://bun.sh/)
-[![CI](https://github.com/natanelia/comlink-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-plus/actions)
+[![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-plus/)!**
+> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-worker-pool/)!**
 
 **The modern monorepo for high-performance, ergonomic web worker pools in React, JS, and TypeScript — powered by Comlink.**
 
 ---
 
-## ✨ Why comlink-plus?
+## ✨ Why comlink-worker-pool?
 
 - 🚀 Effortless parallelism: Offload heavy computation to workers, keep your UI snappy
 - 🧩 Modular: Use just the core, or drop in React bindings for instant hooks
@@ -23,7 +23,7 @@
 
 - [**comlink-worker-pool**](./packages/comlink-worker-pool/README.md): Reusable, Comlink-based worker pool library for parallel processing
 - [**comlink-worker-pool-react**](./packages/comlink-worker-pool-react/README.md): React bindings for the worker pool, including the `useWorkerPool` hook
-- [**playground**](./packages/playground/README.md): Interactive React demo app showcasing the worker pool and React bindings ([Live playground](https://natanelia.github.io/comlink-plus/))
+- [**playground**](./packages/playground/README.md): Interactive React demo app showcasing the worker pool and React bindings ([Live playground](https://natanelia.github.io/comlink-worker-pool/))
 
 ## 🚀 Quick Start (For Package Users)
 
@@ -150,7 +150,7 @@ If you want to contribute or run the playground locally:
 ## 🗂️ Monorepo Structure
 
 ```
-comlink-plus/
+comlink-worker-pool/
 ├── packages/
 │   ├── comlink-worker-pool/        # The worker pool library (core)
 │   ├── comlink-worker-pool-react/  # React bindings for the worker pool

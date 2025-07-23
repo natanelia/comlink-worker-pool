@@ -1,9 +1,9 @@
 {
-  "name": "comlink-plus",
+  "name": "comlink-worker-pool",
   "version": "0.0.3",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/natanelia/comlink-plus.git"
+    "url": "git+https://github.com/natanelia/comlink-worker-pool.git"
   },
   "scripts": {
     "playground:lint": "bun run -F comlink-worker-pool-playground lint",
