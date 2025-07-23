@@ -5,7 +5,7 @@
 [![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-plus/)!**
+> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-worker-pool/)!**
 
 **Effortless parallelism for your React and JS/TS apps.**
 
@@ -267,7 +267,7 @@ interface WorkerPoolStats {
 
 ## Playground Demo
 
-Try the live playground demo here: [https://natanelia.github.io/comlink-plus/](https://natanelia.github.io/comlink-plus/)
+Try the live playground demo here: [https://natanelia.github.io/comlink-worker-pool/](https://natanelia.github.io/comlink-worker-pool/)
 
 If you want to run it locally, see the [playground README](../playground/README.md).
 

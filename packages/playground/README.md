@@ -3,7 +3,7 @@
 [![bun compatible](https://img.shields.io/badge/bun-%E2%9C%94%EF%B8%8F-green)](https://bun.sh/)
 [![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
 
-> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-plus/)!**
+> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-worker-pool/)!**
 
 **Interactive React demo for [comlink-worker-pool](../comlink-worker-pool/README.md) and [comlink-worker-pool-react](../comlink-worker-pool-react/README.md).**
 
@@ -23,7 +23,7 @@ From the monorepo root:
 bun run --filter playground dev
 ```
 
-Or try the live playground at: [https://natanelia.github.io/comlink-plus/](https://natanelia.github.io/comlink-plus/)
+Or try the live playground at: [https://natanelia.github.io/comlink-worker-pool/](https://natanelia.github.io/comlink-worker-pool/)
 
 ---
 

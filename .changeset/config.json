@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
-  "changelog": ["@changesets/cli/changelog", { "repo": "https://github.com/natanelia/comlink-plus" } ],
+  "changelog": ["@changesets/cli/changelog", { "repo": "https://github.com/natanelia/comlink-worker-pool" } ],
   "commit": false,
   "fixed": [],
   "linked": [],

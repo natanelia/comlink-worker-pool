@@ -3,7 +3,7 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/natanelia/comlink-plus.git"
+    "url": "https://github.com/natanelia/comlink-worker-pool.git"
   },
   "scripts": {
     "dev": "vite",

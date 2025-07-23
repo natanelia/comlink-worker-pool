@@ -3,7 +3,7 @@
 	"version": "0.0.5",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/natanelia/comlink-plus.git"
+		"url": "git+https://github.com/natanelia/comlink-worker-pool.git"
 	},
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
