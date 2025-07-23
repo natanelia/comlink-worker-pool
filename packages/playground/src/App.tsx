@@ -1,6 +1,6 @@
 import * as Comlink from "comlink";
 import { WorkerPool, type WorkerPoolStats } from "comlink-worker-pool";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./index.css";
 
 const workerFactory = () =>
