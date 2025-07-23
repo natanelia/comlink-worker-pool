@@ -1,35 +1,33 @@
 {
-  "name": "comlink-worker-pool",
-  "version": "0.0.5",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/natanelia/comlink-plus.git"
-  },
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": [
-    "dist"
-  ],
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
-  "type": "module",
-  "scripts": {
-    "build": "bunup",
-    "test": "bun test",
-    "lint": "biome check ."
-  },
-  "dependencies": {
-    "comlink": "^4.4.2"
-  },
-  "devDependencies": {
-    "@types/bun": "^1.2.10",
-    "bunup": "^0.4.41",
-    "oxlint": "^0.16.6",
-    "typescript": "^5.8.3"
-  }
+	"name": "comlink-worker-pool",
+	"version": "0.0.5",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/natanelia/comlink-plus.git"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"files": ["dist"],
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"require": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
+	"type": "module",
+	"scripts": {
+		"build": "bunup",
+		"test": "bun test",
+		"lint": "biome check ."
+	},
+	"dependencies": {
+		"comlink": "^4.4.2"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.2.10",
+		"bunup": "^0.4.41",
+		"oxlint": "^0.16.6",
+		"typescript": "^5.8.3"
+	}
 }

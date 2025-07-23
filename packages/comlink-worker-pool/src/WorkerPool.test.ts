@@ -356,7 +356,7 @@ describe("WorkerPool", () => {
 	test("terminates workers after maxTasksPerWorker", async () => {
 		let workerCreationCount = 0;
 		let terminationCount = 0;
-		
+
 		const pool = new WorkerPool({
 			size: 1,
 			maxTasksPerWorker: 2,
@@ -372,27 +372,27 @@ describe("WorkerPool", () => {
 				}
 			},
 		});
-		
+
 		const api = pool.getApi();
-		
+
 		// Execute tasks one by one to ensure proper sequencing
 		await api.echo("task1");
 		expect(workerCreationCount).toBe(1);
-		
+
 		await api.echo("task2"); // This should trigger termination after completion
-		
+
 		// Wait for termination and stats update
-		await new Promise(resolve => setTimeout(resolve, 100));
-		
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
 		// Execute third task - should create a new worker
 		await api.echo("task3");
-		
+
 		// Wait a bit more to ensure all async operations complete
-		await new Promise(resolve => setTimeout(resolve, 100));
-		
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
 		// Should have created 2 workers total
 		expect(workerCreationCount).toBeGreaterThanOrEqual(2);
-		
+
 		// Clean up
 		pool.terminateAll();
 	});
@@ -408,23 +408,23 @@ describe("WorkerPool", () => {
 			},
 			proxyFactory: comlinkProxyFactory,
 		});
-		
+
 		const api = pool.getApi();
-		
+
 		// Execute first task
 		await api.echo("task1");
-		
+
 		// Wait for worker to exceed lifetime
-		await new Promise(resolve => setTimeout(resolve, 100));
-		
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
 		// Execute second task - should create a new worker if the old one was terminated
 		await api.echo("task2");
-		
+
 		// We expect at least 1 worker, possibly 2 if lifetime termination worked
 		expect(workerCreationCount).toBeGreaterThanOrEqual(1);
 		// For now, let's just verify the basic functionality works
 		expect(workerCreationCount).toBeLessThanOrEqual(2);
-		
+
 		// Clean up
 		pool.terminateAll();
 	});
@@ -441,23 +441,23 @@ describe("WorkerPool", () => {
 			},
 			proxyFactory: comlinkProxyFactory,
 		});
-		
+
 		const api = pool.getApi();
-		
+
 		// Execute 2 tasks quickly (shouldn't trigger task limit)
 		await api.echo("task1");
 		await api.echo("task2");
-		
+
 		// Wait for lifetime to expire
-		await new Promise(resolve => setTimeout(resolve, 100));
-		
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
 		// Execute third task - should create new worker due to lifetime
 		await api.echo("task3");
-		
+
 		// Should have created at least 1 worker, possibly 2 if lifetime worked
 		expect(workerCreationCount).toBeGreaterThanOrEqual(1);
 		expect(workerCreationCount).toBeLessThanOrEqual(2);
-		
+
 		// Clean up
 		pool.terminateAll();
 	});
