@@ -1,5 +1,6 @@
 {
   "name": "comlink-worker-pool",
+  "description": "Web Worker Pool library powered by Comlink to offload CPU-intensive work and parallelise them",
   "version": "0.0.3",
   "repository": {
     "type": "git",

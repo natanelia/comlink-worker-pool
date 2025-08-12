@@ -9,7 +9,7 @@
 
 **Effortless parallelism for your React and JS/TS apps.**
 
-A blazing-fast, ergonomic Web Worker pool library powered by [Comlink](https://github.com/GoogleChromeLabs/comlink). Developed with Bun for fast builds and tests, but works in any modern JS/TS/React app. Offload CPU-intensive work to a pool of workers, maximize throughput, and keep your UI smooth.
+A blazing-fast, ergonomic Web Worker pool library powered by [Comlink](https://github.com/GoogleChromeLabs/comlink). Offload CPU-intensive work to a pool of workers, maximize throughput, and keep your UI smooth.
 
 ---
 
@@ -94,15 +94,15 @@ console.log(pool.getStats());
 
 ## WorkerPool Options
 
-| Option                        | Type                               | Description                                      |
-| ----------------------------- | ---------------------------------- | ------------------------------------------------ |
-| `size`                        | `number`                           | Number of workers in the pool                    |
-| `workerFactory`               | `() => Worker`                     | Factory function to create new workers           |
-| `proxyFactory`                | `(worker: Worker) => P`            | Factory to wrap a worker with Comlink or similar |
-| `onUpdateStats`               | `(stats: WorkerPoolStats) => void` | Callback on pool stats update (optional)         |
-| `workerIdleTimeoutMs`         | `number`                           | Idle timeout for terminating workers (optional)  |
-| `maxTasksPerWorker`           | `number`                           | Max tasks per worker before termination (optional) |
-| `maxWorkerLifetimeMs`         | `number`                           | Max worker lifetime in milliseconds (optional)   |
+| Option                        | Type                               | Description                                               |
+| ----------------------------- | ---------------------------------- | --------------------------------------------------------- |
+| `size`                        | `number`                           | Number of workers in the pool                             |
+| `workerFactory`               | `() => Worker`                     | Factory function to create new workers                    |
+| `proxyFactory`                | `(worker: Worker) => P`            | Factory to wrap a worker with Comlink or similar          |
+| `onUpdateStats`               | `(stats: WorkerPoolStats) => void` | Callback on pool stats update (optional)                  |
+| `workerIdleTimeoutMs`         | `number`                           | Idle timeout for terminating workers (optional)           |
+| `maxTasksPerWorker`           | `number`                           | Max tasks per worker before termination (optional)        |
+| `maxWorkerLifetimeMs`         | `number`                           | Max worker lifetime in milliseconds (optional)            |
 | `maxConcurrentTasksPerWorker` | `number`                           | Max concurrent tasks per worker (optional, defaults to 1) |
 
 ### Advanced Usage
@@ -117,34 +117,40 @@ console.log(pool.getStats());
 The WorkerPool supports automatic worker termination based on different criteria to prevent memory leaks and ensure optimal performance:
 
 #### Task-Based Termination (`maxTasksPerWorker`)
+
 ```ts
 const pool = new WorkerPool<WorkerApi>({
   // ... other options
   maxTasksPerWorker: 100, // Terminate workers after 100 tasks
 });
 ```
+
 - Prevents memory leaks from long-running workers
 - Ensures fresh worker state periodically
 - Useful for workers that accumulate state over time
 
 #### Time-Based Termination (`maxWorkerLifetimeMs`)
+
 ```ts
 const pool = new WorkerPool<WorkerApi>({
   // ... other options
   maxWorkerLifetimeMs: 5 * 60 * 1000, // Terminate workers after 5 minutes
 });
 ```
+
 - Limits worker lifetime to prevent resource accumulation
 - Useful for workers that may develop memory leaks over time
 - Ensures periodic refresh of worker processes
 
 #### Idle Termination (`workerIdleTimeoutMs`)
+
 ```ts
 const pool = new WorkerPool<WorkerApi>({
   // ... other options
   workerIdleTimeoutMs: 30 * 1000, // Terminate idle workers after 30 seconds
 });
 ```
+
 - Reduces resource usage when demand is low
 - Workers are recreated on-demand when needed
 - Helps with memory management in variable-load scenarios
@@ -167,24 +173,26 @@ const pool = new WorkerPool<WorkerApi>({
 
 // These 6 tasks will run on 2 workers, with up to 3 tasks per worker concurrently
 const results = await Promise.all([
-  api.fetchData("url1"),  // Worker 1, Task 1
-  api.fetchData("url2"),  // Worker 1, Task 2  
-  api.fetchData("url3"),  // Worker 1, Task 3
-  api.fetchData("url4"),  // Worker 2, Task 1
-  api.fetchData("url5"),  // Worker 2, Task 2
-  api.fetchData("url6"),  // Worker 2, Task 3
+  api.fetchData("url1"), // Worker 1, Task 1
+  api.fetchData("url2"), // Worker 1, Task 2
+  api.fetchData("url3"), // Worker 1, Task 3
+  api.fetchData("url4"), // Worker 2, Task 1
+  api.fetchData("url5"), // Worker 2, Task 2
+  api.fetchData("url6"), // Worker 2, Task 3
 ]);
 ```
 
 #### When to Use Concurrent Execution
 
 **✅ Good for:**
+
 - I/O-bound operations (network requests, file operations)
 - Tasks with async waiting periods
 - Database queries
 - API calls
 
 **❌ Avoid for:**
+
 - CPU-intensive computations (use more workers instead)
 - Tasks that compete for the same resources
 - Memory-intensive operations
@@ -239,17 +247,18 @@ export function fibAsync(n: number): number {
 
 ```ts
 interface WorkerPoolStats {
-  size: number;                    // Configured maximum number of workers
-  available: number;               // Workers available to take new tasks
-  queue: number;                   // Tasks waiting in the queue
-  workers: number;                 // Currently instantiated workers
-  idleWorkers: number;             // Workers with no running tasks
-  runningTasks: number;            // Total tasks currently executing
+  size: number; // Configured maximum number of workers
+  available: number; // Workers available to take new tasks
+  queue: number; // Tasks waiting in the queue
+  workers: number; // Currently instantiated workers
+  idleWorkers: number; // Workers with no running tasks
+  runningTasks: number; // Total tasks currently executing
   availableForConcurrency: number; // Workers that can accept additional concurrent tasks
 }
 ```
 
 **Key differences with concurrent execution:**
+
 - `idleWorkers`: Workers with zero running tasks
 - `runningTasks`: Total count of all executing tasks across all workers
 - `availableForConcurrency`: Workers that haven't reached their `maxConcurrentTasksPerWorker` limit
