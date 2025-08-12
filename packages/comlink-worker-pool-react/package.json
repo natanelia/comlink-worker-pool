@@ -1,6 +1,6 @@
 {
   "name": "comlink-worker-pool-react",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "React bindings for comlink-worker-pool. Provides useWorkerPool hook.",
   "repository": {
     "type": "git",
