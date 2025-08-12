@@ -28,6 +28,8 @@ function App() {
 	// New state for concurrent execution configuration
 	const [poolSize, setPoolSize] = useState(navigator.hardwareConcurrency || 4);
 	const [maxConcurrentTasks, setMaxConcurrentTasks] = useState(1);
+	const [maxTasksPerWorker, setMaxTasksPerWorker] = useState<number | undefined>(undefined);
+	const [maxWorkerLifetimeMs, setMaxWorkerLifetimeMs] = useState<number | undefined>(undefined);
 	const [isRecreatingPool, setIsRecreatingPool] = useState(false);
 
 	// Function to create/recreate the pool with current settings
@@ -35,12 +37,14 @@ function App() {
 		return new WorkerPool<WorkerApi>({
 			size: poolSize,
 			maxConcurrentTasksPerWorker: maxConcurrentTasks,
+			maxTasksPerWorker,
+			maxWorkerLifetimeMs,
 			workerFactory,
 			proxyFactory,
 			onUpdateStats: setStats,
 			workerIdleTimeoutMs: 1000,
 		});
-	}, [poolSize, maxConcurrentTasks]);
+	}, [poolSize, maxConcurrentTasks, maxTasksPerWorker, maxWorkerLifetimeMs]);
 
 	useEffect(() => {
 		const p = createPool();
@@ -68,7 +72,7 @@ function App() {
 		
 		setLogs(prev => [...prev, {
 			key: Date.now().toString(),
-			text: `🔄 Pool recreated: ${poolSize} workers, ${maxConcurrentTasks} max concurrent tasks per worker`
+			text: `🔄 Pool recreated: ${poolSize} workers, ${maxConcurrentTasks} max concurrent, ${maxTasksPerWorker || 'unlimited'} max tasks/worker, ${maxWorkerLifetimeMs || 'unlimited'}ms lifetime`
 		}]);
 	};
 
@@ -220,7 +224,7 @@ function App() {
 					<h2 className="mb-4 text-2xl font-bold text-organic-400 font-display">
 						⚙️ Pool Configuration
 					</h2>
-					<div className="grid gap-4 md:grid-cols-3">
+					<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
 						<label className="flex flex-col gap-2">
 							<span className="text-sm font-semibold text-organic-300">
 								Pool Size (Workers)
@@ -247,19 +251,49 @@ function App() {
 								className="px-3 py-2 text-base border rounded-lg border-organic-200 bg-organic-50 focus:outline-none focus:ring-2 focus:ring-organic-300"
 							/>
 						</label>
-						<div className="flex items-end">
-							<button
-								onClick={recreatePool}
-								disabled={isRecreatingPool}
-								className="w-full px-4 py-2 text-base font-semibold transition shadow text-organic-50 bg-organic-400 rounded-lg hover:bg-organic-500 disabled:opacity-50 disabled:cursor-not-allowed"
-							>
-								{isRecreatingPool ? "Updating..." : "Apply Changes"}
-							</button>
-						</div>
+						<label className="flex flex-col gap-2">
+							<span className="text-sm font-semibold text-organic-300">
+								Max Tasks Per Worker
+							</span>
+							<input
+								type="number"
+								value={maxTasksPerWorker || ''}
+								min={1}
+								max={1000}
+								placeholder="Unlimited"
+								onChange={(e) => setMaxTasksPerWorker(e.target.value ? Number(e.target.value) : undefined)}
+								className="px-3 py-2 text-base border rounded-lg border-organic-200 bg-organic-50 focus:outline-none focus:ring-2 focus:ring-organic-300"
+							/>
+						</label>
+						<label className="flex flex-col gap-2">
+							<span className="text-sm font-semibold text-organic-300">
+								Max Worker Lifetime (ms)
+							</span>
+							<input
+								type="number"
+								value={maxWorkerLifetimeMs || ''}
+								min={1000}
+								max={300000}
+								placeholder="Unlimited"
+								onChange={(e) => setMaxWorkerLifetimeMs(e.target.value ? Number(e.target.value) : undefined)}
+								className="px-3 py-2 text-base border rounded-lg border-organic-200 bg-organic-50 focus:outline-none focus:ring-2 focus:ring-organic-300"
+							/>
+						</label>
 					</div>
-					<div className="mt-3 text-xs text-organic-500">
+					<div className="mt-4 flex justify-center">
+						<button
+							onClick={recreatePool}
+							disabled={isRecreatingPool}
+							className="px-6 py-2 text-base font-semibold transition shadow text-organic-50 bg-organic-400 rounded-lg hover:bg-organic-500 disabled:opacity-50 disabled:cursor-not-allowed"
+						>
+							{isRecreatingPool ? "Updating..." : "Apply Changes"}
+						</button>
+					</div>
+					<div className="mt-3 text-xs text-organic-500 grid gap-1 md:grid-cols-2">
 						<p><strong>Pool Size:</strong> Number of worker threads in the pool</p>
-						<p><strong>Max Concurrent Tasks:</strong> How many tasks each worker can handle simultaneously (great for I/O-bound operations)</p>
+						<p><strong>Max Concurrent Tasks:</strong> How many tasks each worker can handle simultaneously</p>
+						<p><strong>Max Tasks Per Worker:</strong> Worker terminates after this many tasks (leave empty for unlimited)</p>
+						<p><strong>Max Worker Lifetime:</strong> Worker terminates after this time in milliseconds (leave empty for unlimited)</p>
 					</div>
 				</div>
 
