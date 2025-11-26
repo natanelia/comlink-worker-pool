@@ -174,6 +174,36 @@ We love OSS! Issues and PRs are welcome — see the individual package READMEs f
 - [comlink-worker-pool-react](./packages/comlink-worker-pool-react/README.md)
 - [playground](./packages/playground/README.md)
 
+## 📦 Publishing to npm
+
+This monorepo uses [Changesets](https://github.com/changesets/changesets) for version management and publishing.
+
+### Publishing Workflow
+
+1. **Document your changes:**
+
+   ```bash
+   bun run changeset
+   ```
+
+   Follow the prompts to select packages and version bump type (major/minor/patch).
+
+2. **Update versions:**
+
+   ```bash
+   bun run version
+   ```
+
+   This applies changesets, updates package versions and CHANGELOGs, and syncs dependencies.
+
+3. **Publish to npm:**
+   ```bash
+   bun run release
+   ```
+   This builds, tests, and publishes all packages to npm (requires `npm login`).
+
+**Note:** Make sure you're logged into npm (`npm login`) before running the release command.
+
 ---
 
 Made with ❤️ by [@natanelia](https://github.com/natanelia). Licensed under the MIT License.

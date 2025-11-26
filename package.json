@@ -12,7 +12,10 @@
     "lint": "bun run -F comlink-worker-pool-react -F comlink-worker-pool lint",
     "build": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
     "build:watch": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
-    "test": "bun run -F comlink-worker-pool-react -F comlink-worker-pool test"
+    "test": "bun run -F comlink-worker-pool-react -F comlink-worker-pool test",
+    "changeset": "changeset",
+    "version": "changeset version && bun install",
+    "release": "bun run build && bun run test && changeset publish"
   },
   "private": true,
   "workspaces": [
