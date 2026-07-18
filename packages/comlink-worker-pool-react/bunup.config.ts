@@ -6,4 +6,9 @@ export default defineConfig({
 	format: ["esm", "cjs"],
 	dts: true,
 	minify: true,
+	clean: true,
+	outputExtension: ({ format }) => ({
+		js: format === "esm" ? ".js" : ".cjs",
+		dts: format === "esm" ? ".d.ts" : ".d.cts",
+	}),
 });

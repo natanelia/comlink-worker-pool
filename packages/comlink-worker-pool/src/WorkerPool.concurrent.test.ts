@@ -4,6 +4,7 @@ import { WorkerPool, type WorkerPoolStats } from "./WorkerPool";
 
 type WorkerApi = {
 	echo(x: string): Promise<string>;
+	fail(): Promise<never>;
 	delay(ms: number): Promise<void>;
 	delayAndReturn(ms: number, value: string): Promise<string>;
 };
@@ -19,15 +20,7 @@ describe("WorkerPool - Concurrent Task Execution", () => {
 	}
 
 	function comlinkProxyFactory(worker: Worker): WorkerApi {
-		const base = Comlink.wrap<WorkerApi>(worker);
-		return {
-			echo: (x: string) => base.echo(x),
-			delay: (ms: number) => base.delay(ms),
-			delayAndReturn: async (ms: number, value: string) => {
-				await base.delay(ms);
-				return base.echo(value);
-			},
-		};
+		return Comlink.wrap<WorkerApi>(worker);
 	}
 
 	test("single worker can handle multiple concurrent tasks", async () => {

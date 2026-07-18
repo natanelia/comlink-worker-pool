@@ -1,553 +1,955 @@
-/**
- * Factory type for creating new Web Workers.
- * Used by the WorkerPool to instantiate worker instances.
- */
+import { releaseProxy } from "comlink";
+
+/** Factory for creating a new Web Worker. */
 export type WorkerFactory = () => Worker;
 
-/**
- * Statistics about the current state of the worker pool.
- * Useful for monitoring, dashboards, or adaptive scaling.
- */
+/** Terminates a Worker and resolves only when termination is confirmed. */
+// biome-ignore lint/suspicious/noConfusingVoidType: sync terminators naturally return void.
+export type WorkerTerminator = (worker: Worker) => void | PromiseLike<unknown>;
+
+/** Statistics describing the current state of a worker pool. */
 export interface WorkerPoolStats {
-  /**
-   * Configured maximum number of workers in the pool.
-   */
-  size: number;
-  /**
-   * Number of workers available to take new tasks (idle + not yet created).
-   */
-  available: number;
-  /**
-   * Number of tasks currently waiting in the queue.
-   */
-  queue: number;
-  /**
-   * Number of workers currently instantiated.
-   */
-  workers: number;
-  /**
-   * Number of workers currently idle (no running tasks).
-   */
-  idleWorkers: number;
-  /**
-   * Total number of tasks currently running across all workers.
-   */
-  runningTasks: number;
-  /**
-   * Number of workers that can accept additional concurrent tasks.
-   */
-  availableForConcurrency: number;
+	/** Configured maximum number of scheduler-managed, non-quarantined workers. */
+	size: number;
+	/** Number of existing or not-yet-created workers that can accept work. */
+	available: number;
+	/** Number of tasks waiting for a worker. */
+	queue: number;
+	/** Number of currently instantiated workers. */
+	workers: number;
+	/** Scheduler-managed workers, including busy workers finishing before retirement. */
+	healthyWorkers: number;
+	/** Number of removed workers whose termination is not yet confirmed. */
+	quarantinedWorkers: number;
+	/** Configured extra physical-worker allowance for quarantined workers. */
+	terminationFailureWorkerBuffer: number;
+	/** Cumulative number of failed or timed-out termination attempts. */
+	terminationFailures: number;
+	/** Number of workers with no running tasks. */
+	idleWorkers: number;
+	/** Number of tasks currently running across all workers. */
+	runningTasks: number;
+	/** Number of existing workers that can accept another concurrent task. */
+	availableForConcurrency: number;
 }
 
-/**
- * Internal representation of a scheduled task in the pool.
- *
- * @template T The task payload type (usually { method: string; args: unknown[] }).
- * @template R The result type returned by the task.
- */
+/** Internal representation of a scheduled task. */
 export interface Task<TTask, TResult> {
-  /**
-   * The task payload.
-   */
-  task: TTask;
-  /**
-   * Resolve function for the task promise.
-   */
-  resolve: (value: TResult) => void;
-  /**
-   * Reject function for the task promise.
-   */
-  reject: (reason?: unknown) => void;
+	task: TTask;
+	resolve: (value: TResult) => void;
+	reject: (reason?: unknown) => void;
 }
 
-/**
- * Options for creating a new WorkerPool instance.
- *
- * @template TProxy The proxy type (API interface) exposed by each worker.
- */
+/** Options for creating a WorkerPool. */
 export interface WorkerPoolOptions<
-  // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-  TProxy extends Record<string, (...args: any[]) => Promise<unknown>>
+	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
+	TProxy extends Record<string, (...args: any[]) => unknown>,
 > {
-  /**
-   * The maximum number of workers to create in the pool.
-   */
-  size: number;
-  /**
-   * Optional callback to receive live pool statistics updates.
-   */
-  onUpdateStats?: (stats: WorkerPoolStats) => void;
-  /**
-   * Factory function to create a new worker instance.
-   */
-  workerFactory: WorkerFactory;
-  /**
-   * Factory function to create a new proxy instance for a given worker.
-   */
-  proxyFactory: (worker: Worker) => TProxy;
-  /**
-   * Optional timeout (in milliseconds) after which idle workers are terminated.
-   */
-  workerIdleTimeoutMs?: number;
-  /**
-   * Optional maximum number of tasks a worker can execute before being terminated.
-   * Worker will be terminated after completing its current task when this limit is reached.
-   */
-  maxTasksPerWorker?: number;
-  /**
-   * Optional maximum lifetime (in milliseconds) for a worker.
-   * Worker will be terminated after completing its current task when this time is exceeded.
-   */
-  maxWorkerLifetimeMs?: number;
-  /**
-   * Optional maximum number of concurrent tasks per worker (defaults to 1).
-   * Set to a higher value to allow multiple tasks to run concurrently on the same worker.
-   * This can improve throughput for I/O-bound or async operations.
-   */
-  maxConcurrentTasksPerWorker?: number;
+	/** Maximum number of scheduler-managed, non-quarantined workers. */
+	size: number;
+	/** Optional callback for pool statistics. Observer errors do not break the pool. */
+	onUpdateStats?: (stats: WorkerPoolStats) => void;
+	/** Creates a fresh worker instance. */
+	workerFactory: WorkerFactory;
+	/** Creates the API proxy associated with a worker. */
+	proxyFactory: (worker: Worker) => TProxy;
+	/** Terminates an idle worker after this many milliseconds. */
+	workerIdleTimeoutMs?: number;
+	/** Retires a worker after this many assigned tasks. */
+	maxTasksPerWorker?: number;
+	/** Retires a worker after this lifetime, once its active tasks finish. */
+	maxWorkerLifetimeMs?: number;
+	/** Maximum concurrent tasks per worker. Defaults to 1. */
+	maxConcurrentTasksPerWorker?: number;
+	/**
+	 * Rejects a task that runs longer than this duration and recycles its worker.
+	 * Defaults to five minutes because this is the only portable way to recover
+	 * from a worker that silently closes. Set to false for intentionally unbounded
+	 * jobs, accepting that a silent worker exit can then leave work pending.
+	 */
+	taskTimeoutMs?: number | false;
+	/** Optional cleanup for resources owned by a proxy (for example Comlink.releaseProxy). */
+	proxyCleanup?: (proxy: TProxy) => void;
+	/**
+	 * Extra physical-worker allowance used to preserve healthy capacity while
+	 * removed workers have unconfirmed termination. Defaults to
+	 * max(2, floor(size / 2)).
+	 */
+	terminationFailureWorkerBuffer?: number;
+	/** Additional termination attempts after the initial attempt. Defaults to 3. */
+	terminationRetryAttempts?: number;
+	/** Initial retry delay; subsequent delays use exponential backoff. Defaults to 100ms. */
+	terminationRetryDelayMs?: number;
+	/** Deadline for each asynchronous termination attempt. Defaults to 5 seconds. */
+	terminationAttemptTimeoutMs?: number;
+	/** Optional host-specific termination implementation. */
+	workerTerminator?: WorkerTerminator;
+	/** Receives isolated termination-attempt failures. */
+	onWorkerTerminationError?: (error: WorkerTerminationError) => void;
 }
 
-/**
- * Internal worker metadata for lifecycle management.
- */
-interface WorkerMetadata<TProxy = unknown> {
-  id: number;
-  proxy: TProxy;
-  worker: Worker;
-  taskCount: number;
-  createdAt: number;
-  runningTasks: number;
-  markedForTermination?: boolean;
+/** Error returned when work is submitted to, or interrupted by, a closed pool. */
+export class WorkerPoolTerminatedError extends Error {
+	constructor(message = "Worker pool has been terminated") {
+		super(message);
+		this.name = "WorkerPoolTerminatedError";
+	}
 }
 
-/**
- * A generic, high-performance worker pool for parallelizing tasks using Web Workers and Comlink.
- *
- * @template TProxy  The proxy type (API interface) exposed by each worker.
- */
+/** Error returned for tasks interrupted by a worker failure. */
+export class WorkerCrashedError extends Error {
+	readonly workerId: number;
 
+	constructor(workerId: number, cause?: unknown) {
+		const detail =
+			cause instanceof Error && cause.message ? `: ${cause.message}` : "";
+		super(`Worker ${workerId} failed${detail}`, { cause });
+		this.name = "WorkerCrashedError";
+		this.workerId = workerId;
+	}
+}
+
+/** Error returned when a task exceeds taskTimeoutMs. */
+export class WorkerTaskTimeoutError extends Error {
+	readonly timeoutMs: number;
+
+	constructor(timeoutMs: number) {
+		super(`Worker task timed out after ${timeoutMs}ms`);
+		this.name = "WorkerTaskTimeoutError";
+		this.timeoutMs = timeoutMs;
+	}
+}
+
+/** Error reported when a worker termination attempt fails or times out. */
+export class WorkerTerminationError extends Error {
+	readonly workerId: number | undefined;
+	readonly attempt: number;
+	readonly exhausted: boolean;
+
+	constructor(
+		workerId: number | undefined,
+		attempt: number,
+		exhausted: boolean,
+		cause?: unknown,
+	) {
+		const workerLabel =
+			workerId === undefined ? "unregistered worker" : `worker ${workerId}`;
+		const detail =
+			cause instanceof Error && cause.message ? `: ${cause.message}` : "";
+		super(`Failed to terminate ${workerLabel} on attempt ${attempt}${detail}`, {
+			cause,
+		});
+		this.name = "WorkerTerminationError";
+		this.workerId = workerId;
+		this.attempt = attempt;
+		this.exhausted = exhausted;
+	}
+}
+
+/** Error returned when quarantined workers consume all physical capacity. */
+export class WorkerPoolCapacityError extends Error {
+	readonly physicalWorkerLimit: number;
+	readonly quarantinedWorkers: number;
+
+	constructor(physicalWorkerLimit: number, quarantinedWorkers: number) {
+		super(
+			`Worker pool cannot create a healthy worker: all ${physicalWorkerLimit} physical slots are occupied, including ${quarantinedWorkers} workers with unconfirmed termination`,
+		);
+		this.name = "WorkerPoolCapacityError";
+		this.physicalWorkerLimit = physicalWorkerLimit;
+		this.quarantinedWorkers = quarantinedWorkers;
+	}
+}
+
+interface ScheduledTask<TTask, TResult> extends Task<TTask, TResult> {
+	settled: boolean;
+	timeout?: ReturnType<typeof setTimeout>;
+}
+
+interface WorkerMetadata<TProxy, TTask, TResult> {
+	id: number;
+	proxy: TProxy;
+	worker: Worker;
+	taskCount: number;
+	createdAt: number;
+	activeTasks: Set<ScheduledTask<TTask, TResult>>;
+	markedForTermination: boolean;
+	idleTimer?: ReturnType<typeof setTimeout>;
+	idleDeadline?: number;
+	lifetimeTimer?: ReturnType<typeof setTimeout>;
+	failureHandler: (event: Event) => void;
+	failureEventTypes: string[];
+}
+
+interface TerminationRecord {
+	worker: Worker;
+	workerId: number | undefined;
+	attempts: number;
+	exhausted: boolean;
+	retryTimer?: ReturnType<typeof setTimeout>;
+	attemptTimers: Set<ReturnType<typeof setTimeout>>;
+}
+
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_TERMINATION_RETRY_ATTEMPTS = 3;
+const DEFAULT_TERMINATION_RETRY_DELAY_MS = 100;
+const DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS = 5_000;
+
+function monotonicNow(): number {
+	return typeof globalThis.performance?.now === "function"
+		? globalThis.performance.now()
+		: Date.now();
+}
+
+function assertPositiveInteger(value: number, name: string): void {
+	if (!Number.isSafeInteger(value) || value < 1) {
+		throw new RangeError(`${name} must be at least 1 and a safe integer`);
+	}
+}
+
+function assertNonNegativeInteger(value: number, name: string): void {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new RangeError(`${name} must be a non-negative safe integer`);
+	}
+}
+
+function assertPositiveDuration(value: number | undefined, name: string): void {
+	if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
+		throw new RangeError(`${name} must be a positive finite number`);
+	}
+}
+
+/** A lazy, bounded pool for proxying calls to Web Workers. */
 export class WorkerPool<
-  // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-  TProxy extends Record<string, (...args: any[]) => Promise<unknown>>,
-  TTask extends { method: keyof TProxy; args: unknown[] } = {
-    method: keyof TProxy;
-    args: unknown[];
-  },
-  TResult = TProxy[TTask["method"]]
+	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
+	TProxy extends Record<string, (...args: any[]) => unknown>,
+	TTask extends { method: keyof TProxy; args: unknown[] } = {
+		method: keyof TProxy;
+		args: unknown[];
+	},
+	TResult = Awaited<ReturnType<TProxy[TTask["method"]]>>,
 > {
-  /**
-   * The maximum number of workers in the pool.
-   */
-  private size: number;
+	private readonly size: number;
+	private readonly onUpdate?: (stats: WorkerPoolStats) => void;
+	private readonly proxyFactory: (worker: Worker) => TProxy;
+	private readonly workerFactory: WorkerFactory;
+	private readonly workerIdleTimeoutMs?: number;
+	private readonly maxTasksPerWorker?: number;
+	private readonly maxWorkerLifetimeMs?: number;
+	private readonly maxConcurrentTasksPerWorker: number;
+	private readonly taskTimeoutMs?: number;
+	private readonly proxyCleanup?: (proxy: TProxy) => void;
+	private readonly terminationFailureWorkerBuffer: number;
+	private readonly physicalWorkerLimit: number;
+	private readonly terminationRetryAttempts: number;
+	private readonly terminationRetryDelayMs: number;
+	private readonly terminationAttemptTimeoutMs: number;
+	private readonly workerTerminator?: WorkerTerminator;
+	private readonly onWorkerTerminationError?: (
+		error: WorkerTerminationError,
+	) => void;
 
-  /**
-   * Optional callback to receive live pool statistics updates.
-   */
-  private onUpdate?: (stats: WorkerPoolStats) => void;
+	private workers: WorkerMetadata<TProxy, TTask, TResult>[] = [];
+	private queue: ScheduledTask<TTask, TResult>[] = [];
+	private readonly quarantinedWorkers = new Map<Worker, TerminationRecord>();
+	private nextWorkerId = 0;
+	private terminated = false;
+	private draining = false;
+	private terminationFailures = 0;
+	private readonly knownWorkers = new WeakSet<object>();
 
-  /**
-   * Array of worker objects.
-   */
-  private workers: WorkerMetadata<TProxy>[] = [];
+	constructor(options: WorkerPoolOptions<TProxy>) {
+		assertPositiveInteger(options.size, "WorkerPool size");
+		assertPositiveInteger(
+			options.maxConcurrentTasksPerWorker ?? 1,
+			"maxConcurrentTasksPerWorker",
+		);
+		if (options.maxTasksPerWorker !== undefined) {
+			assertPositiveInteger(options.maxTasksPerWorker, "maxTasksPerWorker");
+		}
+		assertPositiveDuration(options.workerIdleTimeoutMs, "workerIdleTimeoutMs");
+		assertPositiveDuration(options.maxWorkerLifetimeMs, "maxWorkerLifetimeMs");
+		assertPositiveDuration(
+			options.taskTimeoutMs === false ? undefined : options.taskTimeoutMs,
+			"taskTimeoutMs",
+		);
+		const terminationFailureWorkerBuffer =
+			options.terminationFailureWorkerBuffer ??
+			Math.max(2, Math.floor(options.size / 2));
+		assertNonNegativeInteger(
+			terminationFailureWorkerBuffer,
+			"terminationFailureWorkerBuffer",
+		);
+		const terminationRetryAttempts =
+			options.terminationRetryAttempts ?? DEFAULT_TERMINATION_RETRY_ATTEMPTS;
+		assertNonNegativeInteger(
+			terminationRetryAttempts,
+			"terminationRetryAttempts",
+		);
+		assertPositiveDuration(
+			options.terminationRetryDelayMs,
+			"terminationRetryDelayMs",
+		);
+		assertPositiveDuration(
+			options.terminationAttemptTimeoutMs,
+			"terminationAttemptTimeoutMs",
+		);
+		if (!Number.isSafeInteger(options.size + terminationFailureWorkerBuffer)) {
+			throw new RangeError(
+				"size + terminationFailureWorkerBuffer must be a safe integer",
+			);
+		}
 
-  /**
-   * Array of idle worker objects.
-   */
-  private idle: WorkerMetadata<TProxy>[] = [];
+		this.size = options.size;
+		this.onUpdate = options.onUpdateStats;
+		this.proxyFactory = options.proxyFactory;
+		this.workerFactory = options.workerFactory;
+		this.workerIdleTimeoutMs = options.workerIdleTimeoutMs;
+		this.maxTasksPerWorker = options.maxTasksPerWorker;
+		this.maxWorkerLifetimeMs = options.maxWorkerLifetimeMs;
+		this.maxConcurrentTasksPerWorker = options.maxConcurrentTasksPerWorker ?? 1;
+		this.taskTimeoutMs =
+			options.taskTimeoutMs === false
+				? undefined
+				: (options.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS);
+		this.proxyCleanup = options.proxyCleanup;
+		this.terminationFailureWorkerBuffer = terminationFailureWorkerBuffer;
+		this.physicalWorkerLimit = options.size + terminationFailureWorkerBuffer;
+		this.terminationRetryAttempts = terminationRetryAttempts;
+		this.terminationRetryDelayMs =
+			options.terminationRetryDelayMs ?? DEFAULT_TERMINATION_RETRY_DELAY_MS;
+		this.terminationAttemptTimeoutMs =
+			options.terminationAttemptTimeoutMs ??
+			DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS;
+		this.workerTerminator = options.workerTerminator;
+		this.onWorkerTerminationError = options.onWorkerTerminationError;
+		this._updateStats();
+	}
 
-  /**
-   * Array of scheduled tasks.
-   */
-  private queue: Task<TTask, TResult>[] = [];
+	/** Returns a proxy API that schedules method calls on this pool. */
+	public getApi(): TProxy {
+		const handler: ProxyHandler<object> = {
+			get: (_target, prop) => {
+				// Prevent Promise/React thenable assimilation of the API proxy.
+				if (prop === "then" || typeof prop !== "string") return undefined;
+				return (...args: unknown[]) =>
+					this._run({ method: prop, args } as TTask);
+			},
+		};
+		return new Proxy(Object.create(null), handler) as TProxy;
+	}
 
-  /**
-   * Factory function to create a new proxy instance for a given worker.
-   */
-  private proxyFactory: (worker: Worker) => TProxy;
+	/** Permanently closes the pool, rejects work, and starts bounded worker termination. */
+	public terminateAll(): void {
+		if (this.terminated) return;
+		this.terminated = true;
+		const reason = new WorkerPoolTerminatedError();
 
-  /**
-   * Factory function to create a new worker instance.
-   */
-  private workerFactory: () => Worker;
+		for (const item of this.queue.splice(0)) {
+			this._settleTask(item, false, reason);
+		}
+		for (const worker of [...this.workers]) {
+			for (const item of [...worker.activeTasks]) {
+				this._settleTask(item, false, reason);
+			}
+			worker.activeTasks.clear();
+			this._removeWorker(worker, true);
+		}
+		this._updateStats();
+	}
 
-  /**
-   * Function to execute a task on a worker.
-   */
-  private executeTask: (proxy: TProxy, task: TTask) => Promise<TResult>;
+	/** Returns a consistent snapshot of pool statistics. */
+	public getStats(): WorkerPoolStats {
+		const runningTasks = this.workers.reduce(
+			(sum, worker) => sum + worker.activeTasks.size,
+			0,
+		);
+		const availableForConcurrency = this.workers.filter(
+			(worker) =>
+				!worker.markedForTermination &&
+				worker.activeTasks.size < this.maxConcurrentTasksPerWorker &&
+				!this._hasExpired(worker),
+		).length;
+		const physicalWorkerCount =
+			this.workers.length + this.quarantinedWorkers.size;
+		const uncreatedCapacity = this.terminated
+			? 0
+			: Math.max(
+					0,
+					Math.min(
+						this.size - this.workers.length,
+						this.physicalWorkerLimit - physicalWorkerCount,
+					),
+				);
 
-  /**
-   * Optional timeout (in milliseconds) after which idle workers are terminated.
-   */
-  private workerIdleTimeoutMs?: number;
+		return {
+			size: this.size,
+			available: availableForConcurrency + uncreatedCapacity,
+			queue: this.queue.length,
+			workers: physicalWorkerCount,
+			healthyWorkers: this.workers.length,
+			quarantinedWorkers: this.quarantinedWorkers.size,
+			terminationFailureWorkerBuffer: this.terminationFailureWorkerBuffer,
+			terminationFailures: this.terminationFailures,
+			idleWorkers: this.workers.filter(
+				(worker) => worker.activeTasks.size === 0,
+			).length,
+			runningTasks,
+			availableForConcurrency,
+		};
+	}
 
-  /**
-   * Optional maximum number of tasks a worker can execute before being terminated.
-   */
-  private maxTasksPerWorker?: number;
+	private _run(task: TTask): Promise<TResult> {
+		if (this.terminated) {
+			return Promise.reject(new WorkerPoolTerminatedError());
+		}
 
-  /**
-   * Optional maximum lifetime (in milliseconds) for a worker.
-   */
-  private maxWorkerLifetimeMs?: number;
+		return new Promise<TResult>((resolve, reject) => {
+			this.queue.push({ task, resolve, reject, settled: false });
+			this._next();
+			this._updateStats();
+		});
+	}
 
-  /**
-   * Maximum number of concurrent tasks per worker.
-   */
-  private maxConcurrentTasksPerWorker: number;
+	private _next(): void {
+		if (this.draining || this.terminated) return;
+		this.draining = true;
 
-  /**
-   * Map of idle timers for each worker.
-   */
-  private idleTimers: Map<number, ReturnType<typeof setTimeout>> = new Map();
+		try {
+			while (this.queue.length > 0 && !this.terminated) {
+				let worker: WorkerMetadata<TProxy, TTask, TResult> | null;
+				try {
+					worker = this._getAvailableWorker();
+				} catch (error) {
+					// A broken factory affects the current backlog, but later submissions
+					// may retry after the client fixes a transient resource problem.
+					for (const item of this.queue.splice(0)) {
+						this._settleTask(item, false, error);
+					}
+					break;
+				}
+				if (!worker) break;
 
-  /**
-   * Counter for generating unique worker IDs.
-   */
-  private nextWorkerId = 0;
+				const item = this.queue.shift();
+				if (!item) break;
+				this._dispatch(worker, item);
+			}
+			this._rejectQueueIfPermanentlyExhausted();
+		} finally {
+			this.draining = false;
+		}
+	}
 
-  /**
-   * Creates a new worker instance with crash handling.
-   *
-   * @param id The worker ID.
-   */
-  private _createWorkerWithCrashHandler(id: number): WorkerMetadata<TProxy> {
-    const worker = this.workerFactory();
-    const proxy = this.proxyFactory(worker);
-    const workerMetadata: WorkerMetadata<TProxy> = {
-      id,
-      proxy,
-      worker,
-      taskCount: 0,
-      createdAt: Date.now(),
-      runningTasks: 0,
-      markedForTermination: false,
-    };
+	private _getAvailableWorker(): WorkerMetadata<TProxy, TTask, TResult> | null {
+		for (const worker of [...this.workers]) {
+			if (this._hasExpired(worker)) {
+				worker.markedForTermination = true;
+				if (worker.activeTasks.size === 0) this._removeWorker(worker, false);
+				continue;
+			}
+			if (
+				!worker.markedForTermination &&
+				worker.activeTasks.size < this.maxConcurrentTasksPerWorker
+			) {
+				return worker;
+			}
+		}
 
-    const handleCrash = (_event: Event | ErrorEvent) => {
-      // Remove from idle if present
-      this.idle = this.idle.filter((obj) => obj.id !== id);
-      // Replace in workers array
-      const idx = this.workers.findIndex((obj) => obj.id === id);
-      if (idx !== -1) {
-        const newWorkerId = this._getNextWorkerId();
-        const newWorkerMetadata =
-          this._createWorkerWithCrashHandler(newWorkerId);
-        this.workers[idx] = newWorkerMetadata;
-        this.idle.push(newWorkerMetadata);
-        this._updateStats();
-        this._next();
-      }
-    };
-    worker.addEventListener("error", handleCrash);
-    worker.addEventListener("close", handleCrash);
-    return workerMetadata;
-  }
+		const physicalWorkerCount =
+			this.workers.length + this.quarantinedWorkers.size;
+		if (
+			this.workers.length >= this.size ||
+			physicalWorkerCount >= this.physicalWorkerLimit
+		) {
+			return null;
+		}
 
-  /**
-   * Creates a new WorkerPool instance.
-   *
-   * @param options Options for the worker pool.
-   */
-  constructor(options: WorkerPoolOptions<TProxy>) {
-    if (options.size < 1) {
-      throw new Error("WorkerPool size must be at least 1");
-    }
-    this.size = options.size;
-    this.onUpdate = options.onUpdateStats;
-    this.proxyFactory = options.proxyFactory;
-    this.workerFactory = options.workerFactory;
-    this.workerIdleTimeoutMs = options.workerIdleTimeoutMs;
-    this.maxTasksPerWorker = options.maxTasksPerWorker;
-    this.maxWorkerLifetimeMs = options.maxWorkerLifetimeMs;
-    this.maxConcurrentTasksPerWorker = options.maxConcurrentTasksPerWorker ?? 1;
+		const worker = this._createWorker();
+		this.workers.push(worker);
+		if (this.terminated) {
+			this._removeWorker(worker, true);
+			return null;
+		}
+		this._startLifetimeTimer(worker);
+		return worker;
+	}
 
-    if (this.maxConcurrentTasksPerWorker < 1) {
-      throw new Error("maxConcurrentTasksPerWorker must be at least 1");
-    }
+	private _createWorker(): WorkerMetadata<TProxy, TTask, TResult> {
+		const worker = this.workerFactory();
+		if (
+			(typeof worker !== "object" && typeof worker !== "function") ||
+			!worker
+		) {
+			throw new TypeError("workerFactory must return a Worker object");
+		}
+		if (this.knownWorkers.has(worker)) {
+			throw new Error("workerFactory must return a fresh Worker instance");
+		}
+		this.knownWorkers.add(worker);
 
-    this.executeTask = (proxy: TProxy, task: TTask) => {
-      return proxy[task.method](...task.args) as Promise<TResult>;
-    };
-    // Do not create any workers initially; they are created lazily in _next()
-    this._updateStats();
-  }
+		let proxy: TProxy;
+		try {
+			proxy = this.proxyFactory(worker);
+		} catch (error) {
+			const termination = this._quarantineWorker(worker);
+			this._attemptTermination(termination);
+			throw error;
+		}
 
-  /**
-   * Returns a proxy API instance for the worker pool.
-   */
-  public getApi(): TProxy {
-    const handler: ProxyHandler<object> = {
-      get: (_target, prop: string) => {
-        // Return a function that, when called, schedules the call on the pool
-        return (...args: unknown[]) => {
-          return this._run({ method: prop, args } as TTask);
-        };
-      },
-    };
-    return new Proxy({}, handler) as TProxy;
-  }
+		const id = this.nextWorkerId++;
+		const metadata = {
+			id,
+			proxy,
+			worker,
+			taskCount: 0,
+			createdAt: monotonicNow(),
+			activeTasks: new Set<ScheduledTask<TTask, TResult>>(),
+			markedForTermination: false,
+			failureHandler: (event: Event) => {
+				const cause =
+					typeof ErrorEvent !== "undefined" &&
+					event instanceof ErrorEvent &&
+					event.error !== undefined
+						? event.error
+						: event;
+				this._handleWorkerFailure(
+					metadata,
+					new WorkerCrashedError(metadata.id, cause),
+				);
+			},
+			failureEventTypes: [] as string[],
+		} satisfies WorkerMetadata<TProxy, TTask, TResult>;
 
-  /**
-   * Runs a task on the worker pool.
-   *
-   * @param task The task to run.
-   */
-  private _run(task: TTask): Promise<TResult> {
-    return new Promise<TResult>((resolve, reject) => {
-      this.queue.push({ task, resolve, reject });
-      this._next();
-      this._updateStats();
-    });
-  }
+		try {
+			for (const type of ["error", "messageerror", "close"]) {
+				worker.addEventListener(type, metadata.failureHandler);
+				metadata.failureEventTypes.push(type);
+			}
+		} catch (error) {
+			const termination = this._quarantineWorker(worker, id);
+			this._removeFailureListeners(metadata);
+			this._cleanupProxy(proxy);
+			this._attemptTermination(termination);
+			throw error;
+		}
+		return metadata;
+	}
 
-  /**
-   * Gets an available worker that can accept more tasks, creating a new one if necessary.
-   */
-  private _getAvailableWorker(): WorkerMetadata<TProxy> | null {
-    // First, try to find an existing worker that can accept more concurrent tasks
-    // and is not marked for termination
-    for (const worker of this.workers) {
-      if (
-        worker.runningTasks < this.maxConcurrentTasksPerWorker &&
-        !worker.markedForTermination
-      ) {
-        return worker;
-      }
-    }
+	private _dispatch(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+		item: ScheduledTask<TTask, TResult>,
+	): void {
+		this._clearIdleTimer(worker);
+		worker.activeTasks.add(item);
+		worker.taskCount++;
+		if (
+			this.maxTasksPerWorker !== undefined &&
+			worker.taskCount >= this.maxTasksPerWorker
+		) {
+			worker.markedForTermination = true;
+		}
 
-    // Count workers not marked for termination when checking capacity
-    const activeWorkerCount = this.workers.filter(
-      (w) => !w.markedForTermination
-    ).length;
+		if (this.taskTimeoutMs !== undefined) {
+			this._startTaskTimer(worker, item);
+		}
 
-    // If no existing worker can accept more tasks, create a new one if possible
-    if (activeWorkerCount < this.size) {
-      const id = this._getNextWorkerId();
-      const workerObj = this._createWorkerWithCrashHandler(id);
-      this.workers.push(workerObj);
-      return workerObj;
-    }
+		void Promise.resolve()
+			.then(() => {
+				const method = worker.proxy[item.task.method];
+				if (typeof method !== "function") {
+					throw new TypeError(
+						`Worker proxy method ${String(item.task.method)} is not a function`,
+					);
+				}
+				return method(...item.task.args);
+			})
+			.then(
+				(result) => this._completeTask(worker, item, true, result as TResult),
+				(error) => this._completeTask(worker, item, false, error),
+			);
+	}
 
-    return null;
-  }
+	private _completeTask(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+		item: ScheduledTask<TTask, TResult>,
+		succeeded: boolean,
+		value: unknown,
+	): void {
+		if (!worker.activeTasks.delete(item)) return;
+		this._settleTask(item, succeeded, value);
 
-  /**
-   * Executes the next task in the queue.
-   */
-  private _next() {
-    while (this.queue.length > 0) {
-      const workerObj = this._getAvailableWorker();
-      if (!workerObj) break; // No available workers
+		if (!this._containsWorker(worker) || this.terminated) return;
+		if (worker.activeTasks.size === 0) {
+			if (worker.markedForTermination || this._hasExpired(worker)) {
+				this._removeWorker(worker, false);
+			} else {
+				this._startIdleTimer(worker);
+			}
+		}
+		this._next();
+		this._updateStats();
+	}
 
-      const queueItem = this.queue.shift();
-      if (!queueItem) return;
+	private _handleWorkerFailure(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+		reason: unknown,
+	): void {
+		if (!this._containsWorker(worker)) return;
+		for (const item of [...worker.activeTasks]) {
+			this._settleTask(item, false, reason);
+		}
+		worker.activeTasks.clear();
+		this._removeWorker(worker, true);
+		this._next();
+		this._updateStats();
+	}
 
-      const { task, resolve, reject } = queueItem;
+	private _settleTask(
+		item: ScheduledTask<TTask, TResult>,
+		succeeded: boolean,
+		value: unknown,
+	): void {
+		if (item.settled) return;
+		item.settled = true;
+		if (item.timeout !== undefined) clearTimeout(item.timeout);
+		item.timeout = undefined;
+		if (succeeded) item.resolve(value as TResult);
+		else item.reject(value);
+	}
 
-      // Increment running tasks count before starting
-      workerObj.runningTasks++;
+	private _startTaskTimer(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+		item: ScheduledTask<TTask, TResult>,
+	): void {
+		const timeoutMs = this.taskTimeoutMs;
+		if (timeoutMs === undefined) return;
+		const deadline = monotonicNow() + timeoutMs;
+		const schedule = () => {
+			if (item.settled || !worker.activeTasks.has(item)) return;
+			const remaining = deadline - monotonicNow();
+			if (remaining > 0) {
+				item.timeout = setTimeout(
+					schedule,
+					Math.min(remaining, MAX_TIMER_DELAY_MS),
+				);
+				return;
+			}
+			item.timeout = undefined;
+			this._handleWorkerFailure(worker, new WorkerTaskTimeoutError(timeoutMs));
+		};
+		item.timeout = setTimeout(
+			schedule,
+			Math.min(timeoutMs, MAX_TIMER_DELAY_MS),
+		);
+	}
 
-      // Remove from idle if this was the first task for this worker
-      if (workerObj.runningTasks === 1) {
-        const idleIndex = this.idle.findIndex((w) => w.id === workerObj.id);
-        if (idleIndex !== -1) {
-          this.idle.splice(idleIndex, 1);
-          this._clearIdleTimer(workerObj.id);
-        }
-      }
+	private _hasExpired(worker: WorkerMetadata<TProxy, TTask, TResult>): boolean {
+		return (
+			this.maxWorkerLifetimeMs !== undefined &&
+			monotonicNow() - worker.createdAt >= this.maxWorkerLifetimeMs
+		);
+	}
 
-      this.executeTask(workerObj.proxy, task)
-        .then((result: TResult) => resolve(result))
-        .catch((err: unknown) => reject(err))
-        .finally(() => {
-          // Decrement running tasks count
-          workerObj.runningTasks--;
-          // Increment total task count
-          workerObj.taskCount++;
+	private _startLifetimeTimer(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+	): void {
+		if (this.maxWorkerLifetimeMs === undefined) return;
+		const schedule = () => {
+			if (!this._containsWorker(worker) || this.terminated) return;
+			const remaining =
+				(this.maxWorkerLifetimeMs as number) -
+				(monotonicNow() - worker.createdAt);
+			if (remaining > 0) {
+				worker.lifetimeTimer = setTimeout(
+					schedule,
+					Math.min(remaining, MAX_TIMER_DELAY_MS),
+				);
+				return;
+			}
+			worker.lifetimeTimer = undefined;
+			worker.markedForTermination = true;
+			if (worker.activeTasks.size === 0) this._removeWorker(worker, false);
+			this._next();
+			this._updateStats();
+		};
+		worker.lifetimeTimer = setTimeout(
+			schedule,
+			Math.min(this.maxWorkerLifetimeMs, MAX_TIMER_DELAY_MS),
+		);
+	}
 
-          // Check if worker should be terminated due to lifecycle limits
-          if (this._shouldTerminateWorker(workerObj)) {
-            workerObj.markedForTermination = true;
-          }
+	private _startIdleTimer(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+	): void {
+		if (this.workerIdleTimeoutMs === undefined) return;
+		this._clearIdleTimer(worker);
+		worker.idleDeadline = monotonicNow() + this.workerIdleTimeoutMs;
 
-          // Only terminate if no tasks are running and worker is marked for termination
-          if (workerObj.markedForTermination && workerObj.runningTasks === 0) {
-            setTimeout(() => {
-              this._terminateWorker(workerObj.id);
-              this._updateStats();
-              this._next(); // Process queue after termination
-            }, 10); // Small delay for Comlink cleanup
-          } else if (
-            workerObj.runningTasks === 0 &&
-            !workerObj.markedForTermination
-          ) {
-            // Worker is now idle and not marked for termination, add to idle list
-            this.idle.push(workerObj);
-            this._startIdleTimer(workerObj.id);
-          }
+		const schedule = () => {
+			if (
+				!this._containsWorker(worker) ||
+				worker.activeTasks.size > 0 ||
+				this.terminated
+			) {
+				return;
+			}
+			const remaining = (worker.idleDeadline as number) - monotonicNow();
+			if (remaining > 0) {
+				worker.idleTimer = setTimeout(
+					schedule,
+					Math.min(remaining, MAX_TIMER_DELAY_MS),
+				);
+				return;
+			}
+			worker.idleTimer = undefined;
+			worker.idleDeadline = undefined;
+			this._removeWorker(worker, false);
+			this._next();
+			this._updateStats();
+		};
+		worker.idleTimer = setTimeout(
+			schedule,
+			Math.min(this.workerIdleTimeoutMs, MAX_TIMER_DELAY_MS),
+		);
+	}
 
-          this._updateStats();
-          this._next();
-        });
+	private _clearIdleTimer(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+	): void {
+		if (worker.idleTimer !== undefined) clearTimeout(worker.idleTimer);
+		worker.idleTimer = undefined;
+		worker.idleDeadline = undefined;
+	}
 
-      this._updateStats();
-    }
-  }
+	private _removeWorker(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+		force: boolean,
+	): void {
+		const index = this.workers.findIndex((candidate) => candidate === worker);
+		if (index === -1 || (!force && worker.activeTasks.size > 0)) return;
 
-  /**
-   * Gets the next unique worker ID.
-   *
-   * @returns The next worker ID.
-   */
-  private _getNextWorkerId(): number {
-    return this.nextWorkerId++;
-  }
+		this.workers.splice(index, 1);
+		const termination = this._quarantineWorker(worker.worker, worker.id);
+		this._clearIdleTimer(worker);
+		if (worker.lifetimeTimer !== undefined) clearTimeout(worker.lifetimeTimer);
+		worker.lifetimeTimer = undefined;
+		this._removeFailureListeners(worker);
+		this._cleanupProxy(worker.proxy);
+		this._attemptTermination(termination);
+	}
 
-  /**
-   * Checks if a worker should be terminated based on lifecycle limits.
-   * Only terminates workers that have no running tasks.
-   *
-   * @param workerObj The worker metadata to check.
-   * @returns True if the worker should be terminated.
-   */
-  private _shouldTerminateWorker(workerObj: WorkerMetadata<TProxy>): boolean {
-    // Check task count limit first - mark for termination even if tasks are still running
-    if (
-      this.maxTasksPerWorker &&
-      workerObj.taskCount >= this.maxTasksPerWorker
-    ) {
-      return true;
-    }
+	private _containsWorker(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+	): boolean {
+		return this.workers.some((candidate) => candidate === worker);
+	}
 
-    // Don't terminate workers with running tasks for lifetime limits
-    if (workerObj.runningTasks > 0) {
-      return false;
-    }
+	private _removeFailureListeners(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+	): void {
+		for (const type of worker.failureEventTypes.splice(0)) {
+			try {
+				worker.worker.removeEventListener(type, worker.failureHandler);
+			} catch {
+				// Continue removing the remaining listeners independently.
+			}
+		}
+	}
 
-    // Check lifetime limit
-    if (this.maxWorkerLifetimeMs) {
-      const age = Date.now() - workerObj.createdAt;
-      if (age >= this.maxWorkerLifetimeMs) {
-        return true;
-      }
-    }
+	private _cleanupProxy(proxy: TProxy): void {
+		try {
+			if (this.proxyCleanup) {
+				this.proxyCleanup(proxy);
+				return;
+			}
+			const releasable = proxy as TProxy & {
+				[releaseProxy]?: () => void;
+			};
+			releasable[releaseProxy]?.();
+		} catch {
+			// Cleanup must not strand queued work or other workers.
+		}
+	}
 
-    return false;
-  }
+	private _quarantineWorker(
+		worker: Worker,
+		workerId?: number,
+	): TerminationRecord {
+		const existing = this.quarantinedWorkers.get(worker);
+		if (existing) return existing;
 
-  /**
-   * Terminates a specific worker by ID.
-   *
-   * @param id The worker ID to terminate.
-   */
-  private _terminateWorker(id: number): void {
-    // Find the worker
-    const workerIndex = this.workers.findIndex((obj) => obj.id === id);
-    if (workerIndex === -1) return;
+		const record: TerminationRecord = {
+			worker,
+			workerId,
+			attempts: 0,
+			exhausted: false,
+			attemptTimers: new Set(),
+		};
+		this.quarantinedWorkers.set(worker, record);
+		return record;
+	}
 
-    const workerObj = this.workers[workerIndex];
+	private _attemptTermination(record: TerminationRecord): void {
+		if (this.quarantinedWorkers.get(record.worker) !== record) return;
+		record.retryTimer = undefined;
+		record.exhausted = false;
+		record.attempts++;
 
-    // Don't terminate workers with running tasks
-    if (workerObj.runningTasks > 0) {
-      return;
-    }
+		let result: ReturnType<WorkerTerminator>;
+		try {
+			result = this.workerTerminator
+				? this.workerTerminator(record.worker)
+				: record.worker.terminate();
+		} catch (error) {
+			this._recordTerminationFailure(record, error);
+			return;
+		}
 
-    // Remove from idle if present
-    this.idle = this.idle.filter((obj) => obj.id !== id);
+		let then: unknown;
+		try {
+			then =
+				result !== null &&
+				(typeof result === "object" || typeof result === "function")
+					? (result as PromiseLike<unknown>).then
+					: undefined;
+		} catch (error) {
+			this._recordTerminationFailure(record, error);
+			return;
+		}
 
-    // Terminate the worker immediately to prevent further use
-    workerObj.worker.terminate();
-    this.workers.splice(workerIndex, 1);
+		if (typeof then !== "function") {
+			this._confirmTermination(record);
+			return;
+		}
 
-    // Clear idle timer if exists
-    this._clearIdleTimer(id);
-  }
+		let attemptFinished = false;
+		const deadline = monotonicNow() + this.terminationAttemptTimeoutMs;
+		let timeout!: ReturnType<typeof setTimeout>;
+		const handleTimeout = () => {
+			record.attemptTimers.delete(timeout);
+			if (attemptFinished) return;
+			const remaining = deadline - monotonicNow();
+			if (remaining > 0) {
+				timeout = setTimeout(
+					handleTimeout,
+					Math.min(remaining, MAX_TIMER_DELAY_MS),
+				);
+				record.attemptTimers.add(timeout);
+				return;
+			}
+			attemptFinished = true;
+			this._recordTerminationFailure(
+				record,
+				new Error(
+					`Termination attempt timed out after ${this.terminationAttemptTimeoutMs}ms`,
+				),
+			);
+		};
+		timeout = setTimeout(
+			handleTimeout,
+			Math.min(this.terminationAttemptTimeoutMs, MAX_TIMER_DELAY_MS),
+		);
+		record.attemptTimers.add(timeout);
 
-  /**
-   * Starts an idle timer for a worker.
-   *
-   * @param id The worker ID.
-   */
-  private _startIdleTimer(id: number) {
-    if (!this.workerIdleTimeoutMs) return;
-    this._clearIdleTimer(id);
-    const timer = setTimeout(() => {
-      this._terminateWorker(id);
-      this._updateStats();
-    }, this.workerIdleTimeoutMs);
-    this.idleTimers.set(id, timer);
-  }
+		const terminationPromise = new Promise<unknown>((resolve, reject) => {
+			Reflect.apply(then, result, [resolve, reject]);
+		});
+		void terminationPromise.then(
+			() => {
+				clearTimeout(timeout);
+				record.attemptTimers.delete(timeout);
+				if (attemptFinished) {
+					// A late success is still valid confirmation that the worker is gone.
+					this._confirmTermination(record);
+					return;
+				}
+				attemptFinished = true;
+				this._confirmTermination(record);
+			},
+			(error) => {
+				clearTimeout(timeout);
+				record.attemptTimers.delete(timeout);
+				if (attemptFinished) return;
+				attemptFinished = true;
+				this._recordTerminationFailure(record, error);
+			},
+		);
+	}
 
-  /**
-   * Clears an idle timer for a worker.
-   *
-   * @param id The worker ID.
-   */
-  private _clearIdleTimer(id: number) {
-    const timer = this.idleTimers.get(id);
-    if (timer) {
-      clearTimeout(timer);
-      this.idleTimers.delete(id);
-    }
-  }
+	private _confirmTermination(record: TerminationRecord): void {
+		if (this.quarantinedWorkers.get(record.worker) !== record) return;
+		if (record.retryTimer !== undefined) clearTimeout(record.retryTimer);
+		for (const timer of record.attemptTimers) clearTimeout(timer);
+		record.attemptTimers.clear();
+		this.quarantinedWorkers.delete(record.worker);
+		this._next();
+		this._updateStats();
+	}
 
-  /**
-   * Returns the current statistics of the worker pool.
-   */
-  public getStats(): WorkerPoolStats {
-    // Calculate total running tasks across all workers
-    const runningTasks = this.workers.reduce(
-      (sum, worker) => sum + worker.runningTasks,
-      0
-    );
+	private _recordTerminationFailure(
+		record: TerminationRecord,
+		cause: unknown,
+	): void {
+		if (this.quarantinedWorkers.get(record.worker) !== record) return;
+		this.terminationFailures++;
+		const exhausted = record.attempts > this.terminationRetryAttempts;
+		record.exhausted = exhausted;
+		const error = new WorkerTerminationError(
+			record.workerId,
+			record.attempts,
+			exhausted,
+			cause,
+		);
+		try {
+			this.onWorkerTerminationError?.(error);
+		} catch {
+			// Failure observers are isolated from scheduler control flow.
+		}
 
-    // Calculate workers that can accept additional concurrent tasks
-    const availableForConcurrency = this.workers.filter(
-      (worker) => worker.runningTasks < this.maxConcurrentTasksPerWorker
-    ).length;
+		if (!exhausted) {
+			const exponent = Math.min(record.attempts - 1, 30);
+			const retryDelay = Math.min(
+				this.terminationRetryDelayMs * 2 ** exponent,
+				MAX_TIMER_DELAY_MS,
+			);
+			record.retryTimer = setTimeout(
+				() => this._attemptTermination(record),
+				retryDelay,
+			);
+		}
 
-    // Available capacity includes workers that can accept more tasks + potential new workers
-    const available =
-      availableForConcurrency + (this.size - this.workers.length);
+		this._next();
+		this._updateStats();
+	}
 
-    return {
-      size: this.size,
-      available,
-      queue: this.queue.length,
-      workers: this.workers.length,
-      idleWorkers: this.idle.length,
-      runningTasks,
-      availableForConcurrency,
-    };
-  }
+	private _rejectQueueIfPermanentlyExhausted(): void {
+		if (
+			this.terminated ||
+			this.queue.length === 0 ||
+			this.workers.length > 0 ||
+			this.workers.length + this.quarantinedWorkers.size <
+				this.physicalWorkerLimit ||
+			[...this.quarantinedWorkers.values()].some((record) => !record.exhausted)
+		) {
+			return;
+		}
 
-  /**
-   * Terminates all workers in the pool.
-   */
-  public terminateAll(): void {
-    // Terminate all workers
-    for (const { worker } of this.workers) {
-      worker.terminate();
-    }
-    // Clear idle timers
-    for (const timer of this.idleTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.idleTimers.clear();
-    // Clear all arrays
-    this.workers = [];
-    this.idle = [];
-    this.queue = [];
-    this._updateStats();
-  }
+		const error = new WorkerPoolCapacityError(
+			this.physicalWorkerLimit,
+			this.quarantinedWorkers.size,
+		);
+		for (const item of this.queue.splice(0)) {
+			this._settleTask(item, false, error);
+		}
+	}
 
-  /**
-   * Updates the statistics of the worker pool.
-   */
-  private _updateStats(): void {
-    if (this.onUpdate) {
-      const stats = this.getStats();
-      this.onUpdate(stats);
-    }
-  }
+	private _updateStats(): void {
+		if (!this.onUpdate) return;
+		try {
+			this.onUpdate(this.getStats());
+		} catch {
+			// Observers are isolated from scheduler control flow by design.
+		}
+	}
 }

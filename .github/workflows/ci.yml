@@ -58,6 +58,8 @@ jobs:
         run: bun run --filter comlink-worker-pool build
       - name: Build comlink-worker-pool-react
         run: bun run --filter comlink-worker-pool-react build
+      - name: Smoke test ESM and CommonJS package exports
+        run: bun run test:exports
 
   publish:
     needs: build

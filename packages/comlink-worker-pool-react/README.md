@@ -72,27 +72,41 @@ type Api = {
   add: (a: number, b: number) => Promise<number>;
 };
 
-const { api, status, result, error, call } = useWorkerPool<Api>({
-  workerFactory: () => new Worker(new URL("./worker", import.meta.url)),
-  proxyFactory: (worker) => wrap<Api>(worker),
-  poolSize: 2,
-});
+function Calculator() {
+  const { status, result, error, call } = useWorkerPool<Api>({
+    workerFactory: () =>
+      new Worker(new URL("./worker", import.meta.url), { type: "module" }),
+    proxyFactory: (worker) => wrap<Api>(worker),
+    poolSize: 2,
+    taskTimeoutMs: 60_000, // Customize the five-minute default
+    terminationFailureWorkerBuffer: 2,
+  });
 
-return (
-  <div>
-    <button
-      onClick={async () => {
-        await call("add", 2, 3);
-      }}
-    >
-      Add 2 + 3
-    </button>
-    {status}
-    {result && <div>Result: {result}</div>}
-    {error && <div>Error: {String(error)}</div>}
-  </div>
-);
+  return (
+    <div>
+      <button onClick={() => call("add", 2, 3)}>Add 2 + 3</button>
+      {status}
+      {result !== null && <div>Result: {String(result)}</div>}
+      {error && <div>Error: {String(error)}</div>}
+    </div>
+  );
+}
 ```
+
+Inline factories are safe: callback identity churn does not recreate the pool.
+If a new `workerFactory`, `proxyFactory`, or `proxyCleanup` must take
+effect, change the `reconfigureKey` option explicitly. Pool-size and
+lifecycle-option changes reconfigure automatically. When calls overlap,
+status/result/error belong to the latest-started `call()`.
+
+The hook forwards the core pool's bounded termination options:
+`terminationFailureWorkerBuffer`, `terminationRetryAttempts`,
+`terminationRetryDelayMs`, `terminationAttemptTimeoutMs`,
+`workerTerminator`, and `onWorkerTerminationError`. The buffer defaults to
+`max(2, floor(poolSize / 2))`, preserving healthy capacity through that many
+extra potentially-live workers before degrading capacity. Change
+`reconfigureKey` when replacing `workerTerminator`; callback identity changes
+alone do not recreate the pool.
 
 > 💡 **Tip:** Try the [live playground demo](https://natanelia.github.io/comlink-worker-pool/) for a full working example!
 

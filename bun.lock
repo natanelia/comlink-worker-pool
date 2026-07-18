@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "comlink-worker-pool-react",
@@ -10,7 +11,7 @@
     },
     "packages/comlink-worker-pool": {
       "name": "comlink-worker-pool",
-      "version": "0.0.1",
+      "version": "0.0.9",
       "dependencies": {
         "comlink": "^4.4.2",
       },
@@ -23,12 +24,9 @@
     },
     "packages/comlink-worker-pool-react": {
       "name": "comlink-worker-pool-react",
-      "version": "0.0.1",
+      "version": "0.0.9",
       "dependencies": {
-        "comlink": "^4.4.2",
-        "comlink-worker-pool": "workspace:packages/comlink-worker-pool",
-        "react": "^19.1.0",
-        "react-dom": "^19.1.0",
+        "comlink-worker-pool": "workspace:*",
       },
       "devDependencies": {
         "@happy-dom/global-registrator": "^17.4.4",
@@ -36,6 +34,8 @@
         "@types/bun": "^1.2.10",
         "bunup": "^0.4.41",
         "oxlint": "^0.16.6",
+        "react": "^19.1.0",
+        "react-dom": "^19.1.0",
         "typescript": "^5.8.3",
       },
       "peerDependencies": {

@@ -13,6 +13,7 @@
     "build": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
     "build:watch": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
     "test": "bun run -F comlink-worker-pool-react -F comlink-worker-pool test",
+    "test:exports": "node scripts/smoke-package-exports.cjs",
     "changeset": "changeset",
     "version": "changeset version && bun install",
     "release": "bun run build && bun run test && changeset publish"

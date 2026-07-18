@@ -1,1 +1,1 @@
-export { useWorkerPool } from "./useWorkerPool";
+export * from "./useWorkerPool";

@@ -16,6 +16,8 @@
 - 🧩 Modular: Use just the core, or drop in React bindings for instant hooks
 - 🦾 TypeScript-first: Full type safety across packages
 - 🛠️ OSS-friendly: Clean structure, easy contributions, and clear docs
+- 🧯 Bounded shutdown recovery: Failed terminations are quarantined without
+  allowing unlimited replacement workers
 
 ---
 
@@ -62,11 +64,7 @@ npm install comlink-worker-pool comlink-worker-pool-react
      fib(n: number): Promise<number>;
    };
 
-   const pool = new WorkerPool<
-     { method: string; args: unknown[] },
-     unknown,
-     WorkerApi
-   >({
+   const pool = new WorkerPool<WorkerApi>({
      size: 2,
      maxConcurrentTasksPerWorker: 3, // NEW: Allow concurrent tasks per worker
      workerFactory: () =>

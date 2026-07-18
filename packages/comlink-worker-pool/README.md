@@ -68,11 +68,7 @@ type WorkerApi = {
 };
 
 // Create the worker pool
-const pool = new WorkerPool<
-  { method: string; args: unknown[] }, // Task type
-  unknown, // Result type (can be more specific)
-  WorkerApi // Proxy type
->({
+const pool = new WorkerPool<WorkerApi>({
   size: 2,
   workerFactory: () =>
     new Worker(new URL("./worker.ts", import.meta.url), { type: "module" }),
@@ -81,6 +77,8 @@ const pool = new WorkerPool<
   workerIdleTimeoutMs: 30000, // Optional: terminate idle workers after 30s
   maxTasksPerWorker: 100, // Optional: terminate workers after 100 tasks
   maxWorkerLifetimeMs: 5 * 60 * 1000, // Optional: terminate workers after 5 minutes
+  taskTimeoutMs: 60_000, // Customize the 5-minute silent-exit/hang deadline
+  terminationFailureWorkerBuffer: 2, // Optional replacement budget for failed termination
 });
 
 // Use the API proxy for ergonomic calls
@@ -96,7 +94,7 @@ console.log(pool.getStats());
 
 | Option                        | Type                               | Description                                      |
 | ----------------------------- | ---------------------------------- | ------------------------------------------------ |
-| `size`                        | `number`                           | Number of workers in the pool                    |
+| `size`                        | `number`                           | Maximum scheduler-managed, non-quarantined workers |
 | `workerFactory`               | `() => Worker`                     | Factory function to create new workers           |
 | `proxyFactory`                | `(worker: Worker) => P`            | Factory to wrap a worker with Comlink or similar |
 | `onUpdateStats`               | `(stats: WorkerPoolStats) => void` | Callback on pool stats update (optional)         |
@@ -104,13 +102,19 @@ console.log(pool.getStats());
 | `maxTasksPerWorker`           | `number`                           | Max tasks per worker before termination (optional) |
 | `maxWorkerLifetimeMs`         | `number`                           | Max worker lifetime in milliseconds (optional)   |
 | `maxConcurrentTasksPerWorker` | `number`                           | Max concurrent tasks per worker (optional, defaults to 1) |
+| `taskTimeoutMs`               | `number \| false`                   | Task deadline; defaults to 5 minutes, false disables it |
+| `proxyCleanup`                | `(proxy: P) => void`               | Custom proxy cleanup before worker termination (optional) |
+| `terminationFailureWorkerBuffer` | `number`                       | Extra worker slots that preserve capacity after termination failure; defaults to `max(2, floor(size / 2))` |
+| `terminationRetryAttempts`    | `number`                           | Additional termination attempts after the first; defaults to 3 |
+| `terminationRetryDelayMs`     | `number`                           | Initial exponential-backoff delay; defaults to 100ms |
+| `terminationAttemptTimeoutMs` | `number`                           | Deadline for each async termination attempt; defaults to 5 seconds |
+| `workerTerminator`            | `(worker: Worker) => void \| PromiseLike<unknown>` | Optional host-specific termination implementation |
+| `onWorkerTerminationError`    | `(error: WorkerTerminationError) => void` | Isolated callback for failed or timed-out termination attempts |
 
 ### Advanced Usage
 
-- The pool is generic: `WorkerPool<T, R, P>`
-  - `T`: Task type (must be `{ method: string; args: unknown[] }` for proxy mode)
-  - `R`: Result type
-  - `P`: Proxy type (your worker API interface)
+- Most callers only need `WorkerPool<WorkerApi>`. Advanced callers can use
+  `WorkerPool<TProxy, TTask, TResult>`.
 
 ### Worker Lifecycle Management
 
@@ -150,6 +154,49 @@ const pool = new WorkerPool<WorkerApi>({
 - Helps with memory management in variable-load scenarios
 
 All lifecycle management options can be combined for comprehensive worker management.
+
+### Unconfirmed Termination Containment
+
+The browser provides no stronger portable primitive if `worker.terminate()`
+itself throws. The pool therefore quarantines that worker and continues counting
+it as potentially alive. It admits replacements using two independent bounds:
+
+```text
+managed workers <= size
+managed + quarantined workers <= size + terminationFailureWorkerBuffer
+```
+
+`terminationFailureWorkerBuffer` defaults to
+`max(2, floor(size / 2))`. Full healthy capacity is preserved while the
+quarantine count fits within that buffer. After the physical limit is
+reached, capacity degrades instead of creating unbounded possible zombie
+workers. If no healthy worker or retry path remains, queued and future work
+rejects with `WorkerPoolCapacityError`.
+
+Termination is attempted once plus three retries by default, using exponential
+backoff from 100ms. A promise returned by `workerTerminator` must confirm
+termination within five seconds per attempt. These values can be changed with
+`terminationRetryAttempts`, `terminationRetryDelayMs`, and
+`terminationAttemptTimeoutMs`. `terminateAll()` closes the scheduler
+immediately and continues this bounded retry policy; quarantined workers remain
+visible in statistics until termination is confirmed.
+
+Use `workerTerminator` for a host-specific supervisor:
+
+```ts
+const pool = new WorkerPool<WorkerApi>({
+  size: 4,
+  terminationFailureWorkerBuffer: 2,
+  workerFactory,
+  proxyFactory,
+  workerTerminator: async (worker) => {
+    await supervisor.terminate(worker); // Resolve only after confirmed shutdown
+  },
+  onWorkerTerminationError: (error) => {
+    console.error(error.attempt, error.exhausted, error.cause);
+  },
+});
+```
 
 ### Concurrent Task Execution
 
@@ -233,16 +280,29 @@ export function fibAsync(n: number): number {
 
 - `getApi(): P` — Returns a proxy for calling worker methods as if local (recommended).
 - `getStats(): WorkerPoolStats` — Returns live stats about the pool.
-- `terminateAll(): void` — Terminates all workers and clears the pool.
+- `terminateAll(): void` — Permanently closes the pool, rejects queued and
+  active work, releases standard Comlink proxies, and starts bounded
+  termination for every healthy worker.
+
+Standard browser Workers do not emit a portable `close` event when worker code
+calls `self.close()`, so tasks have a five-minute default deadline. Customize
+`taskTimeoutMs` for the workload, or set it to `false` only for intentionally
+unbounded jobs. A timeout rejects all tasks on that worker and replaces it for
+queued work; tasks are never automatically retried because they may have already
+produced side effects.
 
 ### WorkerPoolStats Interface
 
 ```ts
 interface WorkerPoolStats {
-  size: number;                    // Configured maximum number of workers
+  size: number;                    // Maximum scheduler-managed workers
   available: number;               // Workers available to take new tasks
   queue: number;                   // Tasks waiting in the queue
-  workers: number;                 // Currently instantiated workers
+  workers: number;                 // Healthy plus quarantined physical workers
+  healthyWorkers: number;          // Managed workers, including busy workers retiring afterward
+  quarantinedWorkers: number;      // Workers with unconfirmed termination
+  terminationFailureWorkerBuffer: number; // Configured failed-termination buffer
+  terminationFailures: number;     // Cumulative failed/timed-out attempts
   idleWorkers: number;             // Workers with no running tasks
   runningTasks: number;            // Total tasks currently executing
   availableForConcurrency: number; // Workers that can accept additional concurrent tasks
@@ -253,6 +313,8 @@ interface WorkerPoolStats {
 - `idleWorkers`: Workers with zero running tasks
 - `runningTasks`: Total count of all executing tasks across all workers
 - `availableForConcurrency`: Workers that haven't reached their `maxConcurrentTasksPerWorker` limit
+- `workers` can exceed `size` only by the configured termination-failure buffer;
+  quarantined workers never receive tasks.
 
 ## Development
 

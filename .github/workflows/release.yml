@@ -30,6 +30,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
       - run: bun install --frozen-lockfile
+      - name: Build publishable artifacts
+        run: bun run build
       - name: Publish packages with Changesets
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

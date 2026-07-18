@@ -1,57 +1,71 @@
-import type {
-	WorkerFactory,
+import {
+	type WorkerFactory,
 	WorkerPool,
-	WorkerPoolOptions,
+	type WorkerPoolOptions,
+	type WorkerPoolStats,
 } from "comlink-worker-pool";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 interface ProxyDefault {
-	// biome-ignore lint/suspicious/noExplicitAny: <explanation>
-	[key: string]: (...args: any[]) => Promise<unknown>;
+	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
+	[key: string]: (...args: any[]) => unknown;
 }
 
-/**
- * Options for configuring the useWorkerPool hook.
- *
- * @template TProxy The type of the proxy API exposed by the worker.
- */
+/** Options for configuring useWorkerPool. */
 export interface UseWorkerPoolOptions<TProxy extends ProxyDefault> {
-	/** A function that creates a new Worker instance. */
+	/** Creates a fresh Worker instance. */
 	workerFactory: WorkerFactory;
-	/** A function that creates a proxy API for the worker. */
+	/** Creates the proxy API for a Worker. */
 	proxyFactory: (worker: Worker) => TProxy;
-	/** The number of workers in the pool (default: navigator.hardwareConcurrency || 4). */
+	/** Number of workers (defaults to navigator.hardwareConcurrency, then 4). */
 	poolSize?: number;
-	/** Optional callback for worker pool statistics updates. */
+	/** Receives live pool statistics without causing pool reconfiguration. */
 	onUpdateStats?: WorkerPoolOptions<TProxy>["onUpdateStats"];
-	/** Optional timeout (ms) for idle workers before they are terminated. */
+	/** Terminates an idle worker after this duration. */
 	workerIdleTimeoutMs?: number;
+	/** Retires a worker after this many assigned tasks. */
+	maxTasksPerWorker?: number;
+	/** Retires a worker after this lifetime once active tasks finish. */
+	maxWorkerLifetimeMs?: number;
+	/** Maximum number of concurrent tasks assigned to one worker. */
+	maxConcurrentTasksPerWorker?: number;
+	/** Rejects overlong tasks and recycles their worker (five-minute default). */
+	taskTimeoutMs?: WorkerPoolOptions<TProxy>["taskTimeoutMs"];
+	/** Cleans up resources owned by a worker proxy. */
+	proxyCleanup?: (proxy: TProxy) => void;
+	/** Extra worker slots that preserve capacity after termination failure. */
+	terminationFailureWorkerBuffer?: WorkerPoolOptions<TProxy>["terminationFailureWorkerBuffer"];
+	/** Additional termination attempts after the initial attempt. */
+	terminationRetryAttempts?: WorkerPoolOptions<TProxy>["terminationRetryAttempts"];
+	/** Initial exponential-backoff delay for termination retries. */
+	terminationRetryDelayMs?: WorkerPoolOptions<TProxy>["terminationRetryDelayMs"];
+	/** Deadline for an asynchronous termination attempt. */
+	terminationAttemptTimeoutMs?: WorkerPoolOptions<TProxy>["terminationAttemptTimeoutMs"];
+	/** Optional host-specific worker terminator. */
+	workerTerminator?: WorkerPoolOptions<TProxy>["workerTerminator"];
+	/** Receives termination-attempt failures without reconfiguring the pool. */
+	onWorkerTerminationError?: WorkerPoolOptions<TProxy>["onWorkerTerminationError"];
+	/**
+	 * Explicitly recreates the pool when this value changes.
+	 *
+	 * Factory identities are intentionally not effect dependencies, so inline
+	 * callbacks cannot create an initialization loop. Change this key when a
+	 * new workerFactory, proxyFactory, proxyCleanup, or workerTerminator must take effect.
+	 */
+	reconfigureKey?: unknown;
 }
 
-/**
- * Result of useWorkerPool.
- */
-/**
- * Result object returned from the useWorkerPool hook.
- *
- * @template TProxy The type of the proxy API exposed by the worker.
- */
+/** State returned from useWorkerPool. */
 export interface UseWorkerPoolResult<TProxy extends ProxyDefault> {
-	/** The proxy API for calling worker methods, or null if not initialized. */
+	/** Proxy API for direct calls, or null if initialization failed. */
 	api: TProxy | null;
-	/** The status of the last call ("idle", "running", "error", "completed"). */
+	/** State of the latest call started through call(). */
 	status: "idle" | "running" | "error" | "completed";
-	/** The result of the last call. */
+	/** Result of the latest call started through call(). */
 	result: unknown;
-	/** The error from the last call, if any. */
+	/** Error from the latest call or pool initialization. */
 	error: unknown;
-	/**
-	 * Function to call a method on the worker pool. Returns a promise of the result.
-	 *
-	 * @param method - The method name to call on the proxy API.
-	 * @param args - Arguments to pass to the method.
-	 * @returns Promise resolving to the method's result.
-	 */
+	/** Invokes a method and tracks it as the latest call. */
 	call<K extends keyof TProxy>(
 		method: K,
 		...args: Parameters<TProxy[K]>
@@ -59,32 +73,11 @@ export interface UseWorkerPoolResult<TProxy extends ProxyDefault> {
 }
 
 /**
- * React hook for managing a pool of web workers using comlink-worker-pool.
+ * Creates and owns a WorkerPool for the lifetime of a React component.
  *
- * This hook initializes a pool of workers and provides a type-safe proxy API for calling worker methods.
- * It manages worker lifecycle, error handling, and result state for each call.
- *
- * @template TProxy The type of the proxy API exposed by the worker.
- * @param options - Configuration options for the worker pool.
- * @returns An object containing the proxy API, call status, result, error, and a function to call worker methods.
- *
- * @example
- * ```tsx
- * const { api, call, status, result, error } = useWorkerPool<MyWorkerApi>({
- *   workerFactory: () => new Worker(new URL("./worker.ts", import.meta.url)),
- *   proxyFactory: (worker) => Comlink.wrap<MyWorkerApi>(worker),
- *   poolSize: 2,
- * });
- *
- * // Call a worker method:
- * useEffect(() => {
- *   if (api) {
- *     call("myMethod", arg1, arg2)
- *       .then(res => ...)
- *       .catch(err => ...);
- *   }
- * }, [api]);
- * ```
+ * The pool is created only in an effect, so server rendering and abandoned
+ * renders do not create workers. If calls overlap, only the latest-started
+ * call is allowed to update status, result, and error.
  */
 export function useWorkerPool<TProxy extends ProxyDefault>(
 	options: UseWorkerPoolOptions<TProxy>,
@@ -95,33 +88,111 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 	const [result, setResult] = useState<unknown>(null);
 	const [error, setError] = useState<unknown>(null);
 	const [api, setApi] = useState<TProxy | null>(null);
-	const poolRef = useRef<WorkerPool<TProxy> | null>(null);
+	const generationRef = useRef(0);
+	const latestCallIdRef = useRef(0);
+	const statsCallbackRef = useRef(options.onUpdateStats);
+	const workerFactoryRef = useRef(options.workerFactory);
+	const proxyFactoryRef = useRef(options.proxyFactory);
+	const proxyCleanupRef = useRef(options.proxyCleanup);
+	const workerTerminatorRef = useRef(options.workerTerminator);
+	const terminationErrorCallbackRef = useRef(options.onWorkerTerminationError);
+	statsCallbackRef.current = options.onUpdateStats;
+	workerFactoryRef.current = options.workerFactory;
+	proxyFactoryRef.current = options.proxyFactory;
+	proxyCleanupRef.current = options.proxyCleanup;
+	workerTerminatorRef.current = options.workerTerminator;
+	terminationErrorCallbackRef.current = options.onWorkerTerminationError;
+
+	const {
+		poolSize,
+		workerIdleTimeoutMs,
+		maxTasksPerWorker,
+		maxWorkerLifetimeMs,
+		maxConcurrentTasksPerWorker,
+		taskTimeoutMs,
+		terminationFailureWorkerBuffer,
+		terminationRetryAttempts,
+		terminationRetryDelayMs,
+		terminationAttemptTimeoutMs,
+		reconfigureKey,
+	} = options;
 
 	useEffect(() => {
-		let cancelled = false;
-		import("comlink-worker-pool").then(({ WorkerPool }) => {
-			if (cancelled) return;
-			poolRef.current = new WorkerPool<TProxy>({
-				size: options.poolSize || navigator.hardwareConcurrency || 4,
-				workerFactory: options.workerFactory,
-				proxyFactory: options.proxyFactory,
-				onUpdateStats: options.onUpdateStats,
-				workerIdleTimeoutMs: options.workerIdleTimeoutMs,
+		void reconfigureKey;
+		const generation = ++generationRef.current;
+		++latestCallIdRef.current;
+		let pool: WorkerPool<TProxy> | null = null;
+
+		try {
+			const hardwareConcurrency =
+				typeof navigator !== "undefined" &&
+				Number.isSafeInteger(navigator.hardwareConcurrency) &&
+				navigator.hardwareConcurrency > 0
+					? navigator.hardwareConcurrency
+					: 4;
+
+			// Capture factories for this generation. reconfigureKey is the explicit
+			// signal for replacing them; callback identity churn alone is ignored.
+			pool = new WorkerPool<TProxy>({
+				size: poolSize ?? hardwareConcurrency,
+				workerFactory: workerFactoryRef.current,
+				proxyFactory: proxyFactoryRef.current,
+				onUpdateStats: (stats: WorkerPoolStats) => {
+					if (generationRef.current === generation) {
+						statsCallbackRef.current?.(stats);
+					}
+				},
+				workerIdleTimeoutMs,
+				maxTasksPerWorker,
+				maxWorkerLifetimeMs,
+				maxConcurrentTasksPerWorker,
+				taskTimeoutMs,
+				proxyCleanup: proxyCleanupRef.current,
+				terminationFailureWorkerBuffer,
+				terminationRetryAttempts,
+				terminationRetryDelayMs,
+				terminationAttemptTimeoutMs,
+				workerTerminator: workerTerminatorRef.current,
+				onWorkerTerminationError: (terminationError) => {
+					if (generationRef.current === generation) {
+						terminationErrorCallbackRef.current?.(terminationError);
+					}
+				},
 			});
-			setApi(poolRef.current.getApi());
-		});
+			setApi(pool.getApi());
+			setStatus("idle");
+			setResult(null);
+			setError(null);
+		} catch (initializationError) {
+			if (generationRef.current === generation) {
+				setApi(null);
+				setStatus("error");
+				setResult(null);
+				setError(initializationError);
+			}
+		}
+
 		return () => {
-			cancelled = true;
-			poolRef.current?.terminateAll?.();
-			poolRef.current = null;
-			setApi(null);
+			if (generationRef.current === generation) {
+				++generationRef.current;
+				++latestCallIdRef.current;
+			}
+			pool?.terminateAll();
 		};
+		// Factory changes are applied only when reconfigureKey changes. This makes
+		// inline factory callbacks safe and gives reconfiguration explicit timing.
 	}, [
-		options.workerFactory,
-		options.proxyFactory,
-		options.poolSize,
-		options.onUpdateStats,
-		options.workerIdleTimeoutMs,
+		poolSize,
+		workerIdleTimeoutMs,
+		maxTasksPerWorker,
+		maxWorkerLifetimeMs,
+		maxConcurrentTasksPerWorker,
+		taskTimeoutMs,
+		terminationFailureWorkerBuffer,
+		terminationRetryAttempts,
+		terminationRetryDelayMs,
+		terminationAttemptTimeoutMs,
+		reconfigureKey,
 	]);
 
 	const call = useCallback(
@@ -129,33 +200,43 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 			method: K,
 			...args: Parameters<TProxy[K]>
 		): Promise<Awaited<ReturnType<TProxy[K]>>> => {
-			setStatus("running");
-			setResult(null);
-			setError(null);
-			if (!api) {
-				setStatus("error");
-				setError(new Error("Worker pool not initialized"));
-				throw new Error("Worker pool not initialized");
+			const callId = ++latestCallIdRef.current;
+			const generation = generationRef.current;
+			const isCurrent = () =>
+				generationRef.current === generation &&
+				latestCallIdRef.current === callId;
+
+			if (isCurrent()) {
+				setStatus("running");
+				setResult(null);
+				setError(null);
 			}
+			if (!api) {
+				const notInitialized = new Error("Worker pool not initialized");
+				if (isCurrent()) {
+					setStatus("error");
+					setError(notInitialized);
+				}
+				throw notInitialized;
+			}
+
 			try {
-				const res = await api[method](...args);
-				setResult(res);
-				setStatus("completed");
-				return res as Awaited<ReturnType<TProxy[K]>>;
-			} catch (err) {
-				setError(err);
-				setStatus("error");
-				throw err;
+				const value = await api[method](...args);
+				if (isCurrent()) {
+					setResult(value);
+					setStatus("completed");
+				}
+				return value as Awaited<ReturnType<TProxy[K]>>;
+			} catch (callError) {
+				if (isCurrent()) {
+					setError(callError);
+					setStatus("error");
+				}
+				throw callError;
 			}
 		},
 		[api],
 	);
 
-	return {
-		api,
-		status,
-		result,
-		error,
-		call,
-	};
+	return { api, status, result, error, call };
 }
