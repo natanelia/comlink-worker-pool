@@ -1,71 +1,44 @@
-name: Release and Changelog
+name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
 
 jobs:
-  version-and-changelog:
+  release:
+    name: Create version PR or publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v1
-      - run: bun install --frozen-lockfile
-      - name: Create version bumps and changelogs with Changesets
-        run: bunx changeset version
-      - name: Commit and push changelogs and versions
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "chore(release): version bump & changelog [skip ci]" || echo "No changes to commit"
-          git push origin HEAD:main
-
-  publish:
-    needs: version-and-changelog
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v1
-      - run: bun install --frozen-lockfile
-      - name: Build publishable artifacts
-        run: bun run build
-      - name: Publish packages with Changesets
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: bunx changeset publish
-
-  github-release:
-    needs: publish
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/checkout@v4
-      - name: Aggregate all changelogs
-        id: changelogs
-        run: |
-          TAG_NAME=$(basename ${{ github.ref }})
-          VERSION=${TAG_NAME#v}
-          echo "Aggregating changelogs for version $VERSION..."
-          RELEASE_BODY=""
-          for file in $(find . -name CHANGELOG.md); do
-            PKG=$(dirname "$file")
-            TITLE="$(basename "$PKG")"
-            # Extract the latest entry for this version
-            ENTRY=$(awk "/^##? ?\\[?$VERSION\\]?/ {flag=1; next} /^##? /{flag=0} flag" "$file")
-            if [ -n "$ENTRY" ]; then
-              RELEASE_BODY+=$'\n\n### '$TITLE$'\n'"$ENTRY"
-            fi
-          done
-          if [ -z "$RELEASE_BODY" ]; then
-            RELEASE_BODY="No changelog entries found for this release."
-          fi
-          echo "$RELEASE_BODY" > RELEASE_BODY.md
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          body_path: RELEASE_BODY.md
+          fetch-depth: 0
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Create version PR or publish packages
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          version: bun run version
+          publish: bun run release
+          commit: "chore: version packages"
+          title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_PROVENANCE: true
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
