@@ -144,6 +144,25 @@ so could also destroy unrelated concurrent calls on that worker. The worker
 slot remains occupied until the underlying call finishes or `taskTimeoutMs`
 recycles the worker.
 
+### Graceful and Awaitable Shutdown
+
+Use `drain()` to stop accepting new calls while allowing already accepted work
+to finish. The pool terminates its workers after the queue and active calls are
+empty. Use `close()` when active and queued calls should be rejected
+immediately.
+
+```ts
+const report = await pool.drain();
+if (!report.confirmed) {
+  console.error(`${report.unconfirmedWorkers} workers may still be alive`);
+}
+```
+
+Both methods return the same report available from `pool.terminated`. It
+resolves after every worker termination is either confirmed or has exhausted
+the configured retries. `confirmed: false` therefore reports a bounded cleanup
+failure instead of leaving shutdown awaiting forever.
+
 ### Worker Lifecycle Management
 
 The WorkerPool supports automatic worker termination based on different criteria to prevent memory leaks and ensure optimal performance:
@@ -310,6 +329,12 @@ export function fibAsync(n: number): number {
 - `run(method, args, options)` — Submits a typed call with priority,
   `AbortSignal`, and queue-deadline controls.
 - `getStats(): WorkerPoolStats` — Returns live stats about the pool.
+- `drain(): Promise<WorkerPoolShutdownReport>` — Rejects new work, finishes
+  accepted work, and awaits worker cleanup.
+- `close(): Promise<WorkerPoolShutdownReport>` — Rejects all work immediately
+  and awaits worker cleanup.
+- `terminated: Promise<WorkerPoolShutdownReport>` — Shared final shutdown
+  outcome for either close path.
 - `terminateAll(): void` — Permanently closes the pool, rejects queued and
   active work, releases standard Comlink proxies, and starts bounded
   termination for every healthy worker.

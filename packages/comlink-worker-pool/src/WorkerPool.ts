@@ -46,6 +46,16 @@ export interface WorkerPoolStats {
 	availableForConcurrency: number;
 }
 
+/** Final outcome of an awaitable WorkerPool shutdown. */
+export interface WorkerPoolShutdownReport {
+	/** True when termination was confirmed for every worker. */
+	confirmed: boolean;
+	/** Workers whose termination could not be confirmed after all retries. */
+	unconfirmedWorkers: number;
+	/** Cumulative failed or timed-out termination attempts. */
+	terminationFailures: number;
+}
+
 /** Internal representation of a scheduled task. */
 export interface Task<TTask, TResult> {
 	task: TTask;
@@ -318,12 +328,21 @@ export class WorkerPool<
 	private readonly quarantinedWorkers = new Map<Worker, TerminationRecord>();
 	private nextWorkerId = 0;
 	private nextTaskSequence = 0;
-	private terminated = false;
-	private draining = false;
+	private accepting = true;
+	private drainRequested = false;
+	private terminationStarted = false;
+	private scheduling = false;
+	private shutdownResolved = false;
 	private terminationFailures = 0;
 	private readonly knownWorkers = new WeakSet<object>();
+	private resolveTerminated!: (report: WorkerPoolShutdownReport) => void;
+	/** Resolves once every worker is confirmed terminated or cleanup is exhausted. */
+	public readonly terminated: Promise<WorkerPoolShutdownReport>;
 
 	constructor(options: WorkerPoolOptions<TProxy>) {
+		this.terminated = new Promise((resolve) => {
+			this.resolveTerminated = resolve;
+		});
 		assertPositiveInteger(options.size, "WorkerPool size");
 		assertPositiveInteger(
 			options.maxConcurrentTasksPerWorker ?? 1,
@@ -435,10 +454,27 @@ export class WorkerPool<
 		>;
 	}
 
+	/** Stops accepting work, finishes accepted calls, then shuts down all workers. */
+	public drain(): Promise<WorkerPoolShutdownReport> {
+		if (this.terminationStarted) return this.terminated;
+		this.accepting = false;
+		this.drainRequested = true;
+		this._updateStats();
+		return this.terminated;
+	}
+
+	/** Immediately closes the pool and awaits confirmed or exhausted cleanup. */
+	public close(): Promise<WorkerPoolShutdownReport> {
+		this.terminateAll();
+		return this.terminated;
+	}
+
 	/** Permanently closes the pool, rejects work, and starts bounded worker termination. */
 	public terminateAll(): void {
-		if (this.terminated) return;
-		this.terminated = true;
+		if (this.terminationStarted) return;
+		this.accepting = false;
+		this.drainRequested = false;
+		this.terminationStarted = true;
 		const reason = new WorkerPoolTerminatedError();
 
 		for (const item of this.queue.splice(0)) {
@@ -468,7 +504,7 @@ export class WorkerPool<
 		).length;
 		const physicalWorkerCount =
 			this.workers.length + this.quarantinedWorkers.size;
-		const uncreatedCapacity = this.terminated
+		const uncreatedCapacity = this.terminationStarted
 			? 0
 			: Math.max(
 					0,
@@ -496,8 +532,14 @@ export class WorkerPool<
 	}
 
 	private _run(task: TTask, options: WorkerTaskOptions = {}): Promise<TResult> {
-		if (this.terminated) {
-			return Promise.reject(new WorkerPoolTerminatedError());
+		if (!this.accepting) {
+			return Promise.reject(
+				new WorkerPoolTerminatedError(
+					this.drainRequested
+						? "Worker pool is draining"
+						: "Worker pool has been terminated",
+				),
+			);
 		}
 		const priority = options.priority ?? 0;
 		if (!Number.isFinite(priority)) {
@@ -621,11 +663,11 @@ export class WorkerPool<
 	}
 
 	private _next(): void {
-		if (this.draining || this.terminated) return;
-		this.draining = true;
+		if (this.scheduling || this.terminationStarted) return;
+		this.scheduling = true;
 
 		try {
-			while (this.queue.length > 0 && !this.terminated) {
+			while (this.queue.length > 0 && !this.terminationStarted) {
 				let worker: WorkerMetadata<TProxy, TTask, TResult> | null;
 				try {
 					worker = this._getAvailableWorker();
@@ -645,7 +687,7 @@ export class WorkerPool<
 			}
 			this._rejectQueueIfPermanentlyExhausted();
 		} finally {
-			this.draining = false;
+			this.scheduling = false;
 		}
 	}
 
@@ -691,7 +733,7 @@ export class WorkerPool<
 			throw error;
 		}
 		this.workers.push(worker);
-		if (this.terminated) {
+		if (this.terminationStarted) {
 			this._removeWorker(worker, true);
 			return null;
 		}
@@ -805,7 +847,7 @@ export class WorkerPool<
 		if (!worker.activeTasks.delete(item)) return;
 		this._settleTask(item, succeeded, value);
 
-		if (!this._containsWorker(worker) || this.terminated) return;
+		if (!this._containsWorker(worker) || this.terminationStarted) return;
 		if (worker.activeTasks.size === 0) {
 			if (worker.markedForTermination || this._hasExpired(worker)) {
 				this._removeWorker(worker, false);
@@ -891,7 +933,7 @@ export class WorkerPool<
 	): void {
 		if (this.maxWorkerLifetimeMs === undefined) return;
 		const schedule = () => {
-			if (!this._containsWorker(worker) || this.terminated) return;
+			if (!this._containsWorker(worker) || this.terminationStarted) return;
 			const remaining =
 				(this.maxWorkerLifetimeMs as number) -
 				(monotonicNow() - worker.createdAt);
@@ -925,7 +967,7 @@ export class WorkerPool<
 			if (
 				!this._containsWorker(worker) ||
 				worker.activeTasks.size > 0 ||
-				this.terminated
+				this.terminationStarted
 			) {
 				return;
 			}
@@ -1160,7 +1202,7 @@ export class WorkerPool<
 
 	private _rejectQueueIfPermanentlyExhausted(): void {
 		if (
-			this.terminated ||
+			this.terminationStarted ||
 			this.queue.length === 0 ||
 			this.workers.length > 0 ||
 			this.workers.length + this.quarantinedWorkers.size <
@@ -1180,6 +1222,28 @@ export class WorkerPool<
 	}
 
 	private _updateStats(): void {
+		if (
+			this.drainRequested &&
+			!this.terminationStarted &&
+			this.queue.length === 0 &&
+			this.workers.every((worker) => worker.activeTasks.size === 0)
+		) {
+			this.terminateAll();
+			return;
+		}
+		if (
+			this.terminationStarted &&
+			!this.shutdownResolved &&
+			this.workers.length === 0 &&
+			[...this.quarantinedWorkers.values()].every((record) => record.exhausted)
+		) {
+			this.shutdownResolved = true;
+			this.resolveTerminated({
+				confirmed: this.quarantinedWorkers.size === 0,
+				unconfirmedWorkers: this.quarantinedWorkers.size,
+				terminationFailures: this.terminationFailures,
+			});
+		}
 		if (!this.onUpdate) return;
 		try {
 			this.onUpdate(this.getStats());
