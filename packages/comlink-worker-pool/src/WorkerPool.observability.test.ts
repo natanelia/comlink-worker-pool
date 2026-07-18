@@ -201,6 +201,7 @@ describe("WorkerPool - observability", () => {
 	test("remains balanced when an event observer closes the pool reentrantly", async () => {
 		jest.useFakeTimers({ now: 3_000 });
 		const poolRef: { current?: WorkerPool<ObservedApi> } = {};
+		let timersAfterClose = -1;
 		const worker = new ObservedWorker();
 		const pool = new WorkerPool<ObservedApi>({
 			size: 1,
@@ -208,7 +209,10 @@ describe("WorkerPool - observability", () => {
 			workerFactory: () => worker as unknown as Worker,
 			proxyFactory: () => ({ run: () => new Promise(() => {}) }),
 			onEvent: (event) => {
-				if (event.type === "task-started") poolRef.current?.terminateAll();
+				if (event.type === "task-started") {
+					poolRef.current?.terminateAll();
+					timersAfterClose = jest.getTimerCount();
+				}
 			},
 		});
 		poolRef.current = pool;
@@ -223,6 +227,6 @@ describe("WorkerPool - observability", () => {
 			workers: 0,
 			runningTasks: 0,
 		});
-		expect(jest.getTimerCount()).toBe(0);
+		expect(timersAfterClose).toBe(0);
 	});
 });

@@ -1,4 +1,32 @@
 import { releaseProxy } from "comlink";
+import {
+	WorkerCrashedError,
+	WorkerPoolCapacityError,
+	WorkerPoolQueueFullError,
+	WorkerPoolTerminatedError,
+	WorkerQueueTimeoutError,
+	WorkerTaskAbortedError,
+	WorkerTaskTimeoutError,
+	type WorkerTerminationError,
+} from "./errors";
+import {
+	DEFAULT_TASK_TIMEOUT_MS,
+	MAX_TIMER_DELAY_MS,
+	type WorkerMetadata,
+	assertNonNegativeInteger,
+	assertPositiveDuration,
+	assertPositiveInteger,
+	monotonicNow,
+} from "./internal/lifecycle";
+import { type ScheduledTask, SchedulerQueue } from "./internal/scheduler";
+import {
+	DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS,
+	DEFAULT_TERMINATION_RETRY_ATTEMPTS,
+	DEFAULT_TERMINATION_RETRY_DELAY_MS,
+	TerminationController,
+} from "./internal/termination";
+
+export * from "./errors";
 
 /** Factory for creating a new Web Worker. */
 export type WorkerFactory = () => Worker;
@@ -212,183 +240,6 @@ export interface WorkerPoolOptions<
 	onWorkerTerminationError?: (error: WorkerTerminationError) => void;
 }
 
-/** Error returned when work is submitted to, or interrupted by, a closed pool. */
-export class WorkerPoolTerminatedError extends Error {
-	constructor(message = "Worker pool has been terminated") {
-		super(message);
-		this.name = "WorkerPoolTerminatedError";
-	}
-}
-
-/** Error returned for tasks interrupted by a worker failure. */
-export class WorkerCrashedError extends Error {
-	readonly workerId: number;
-
-	constructor(workerId: number, cause?: unknown) {
-		const detail =
-			cause instanceof Error && cause.message ? `: ${cause.message}` : "";
-		super(`Worker ${workerId} failed${detail}`, { cause });
-		this.name = "WorkerCrashedError";
-		this.workerId = workerId;
-	}
-}
-
-/** Error returned when a task exceeds taskTimeoutMs. */
-export class WorkerTaskTimeoutError extends Error {
-	readonly timeoutMs: number;
-
-	constructor(timeoutMs: number) {
-		super(`Worker task timed out after ${timeoutMs}ms`);
-		this.name = "WorkerTaskTimeoutError";
-		this.timeoutMs = timeoutMs;
-	}
-}
-
-/** Error reported when a worker termination attempt fails or times out. */
-export class WorkerTerminationError extends Error {
-	readonly workerId: number | undefined;
-	readonly attempt: number;
-	readonly exhausted: boolean;
-
-	constructor(
-		workerId: number | undefined,
-		attempt: number,
-		exhausted: boolean,
-		cause?: unknown,
-	) {
-		const workerLabel =
-			workerId === undefined ? "unregistered worker" : `worker ${workerId}`;
-		const detail =
-			cause instanceof Error && cause.message ? `: ${cause.message}` : "";
-		super(`Failed to terminate ${workerLabel} on attempt ${attempt}${detail}`, {
-			cause,
-		});
-		this.name = "WorkerTerminationError";
-		this.workerId = workerId;
-		this.attempt = attempt;
-		this.exhausted = exhausted;
-	}
-}
-
-/** Error returned when quarantined workers consume all physical capacity. */
-export class WorkerPoolCapacityError extends Error {
-	readonly physicalWorkerLimit: number;
-	readonly quarantinedWorkers: number;
-
-	constructor(physicalWorkerLimit: number, quarantinedWorkers: number) {
-		super(
-			`Worker pool cannot create a healthy worker: all ${physicalWorkerLimit} physical slots are occupied, including ${quarantinedWorkers} workers with unconfirmed termination`,
-		);
-		this.name = "WorkerPoolCapacityError";
-		this.physicalWorkerLimit = physicalWorkerLimit;
-		this.quarantinedWorkers = quarantinedWorkers;
-	}
-}
-
-/** Error returned when a task cannot enter a full queue or is evicted from it. */
-export class WorkerPoolQueueFullError extends Error {
-	readonly maxQueueSize: number;
-	readonly dropped: boolean;
-
-	constructor(maxQueueSize: number, dropped = false) {
-		super(
-			dropped
-				? `Worker task was dropped because the queue limit of ${maxQueueSize} was reached`
-				: `Worker pool queue limit of ${maxQueueSize} was reached`,
-		);
-		this.name = "WorkerPoolQueueFullError";
-		this.maxQueueSize = maxQueueSize;
-		this.dropped = dropped;
-	}
-}
-
-/** Error returned when a task waits in the queue beyond its deadline. */
-export class WorkerQueueTimeoutError extends Error {
-	readonly timeoutMs: number;
-
-	constructor(timeoutMs: number) {
-		super(`Worker task queue wait timed out after ${timeoutMs}ms`);
-		this.name = "WorkerQueueTimeoutError";
-		this.timeoutMs = timeoutMs;
-	}
-}
-
-/** Error returned when an AbortSignal cancels a scheduled task. */
-export class WorkerTaskAbortedError extends Error {
-	constructor(cause?: unknown) {
-		super("Worker task was aborted", { cause });
-		this.name = "WorkerTaskAbortedError";
-	}
-}
-
-interface ScheduledTask<TTask, TResult> extends Task<TTask, TResult> {
-	settled: boolean;
-	priority: number;
-	sequence: number;
-	enqueuedAt: number;
-	startedAt?: number;
-	workerId?: number;
-	signal?: AbortSignal;
-	abortHandler?: () => void;
-	queueTimeout?: ReturnType<typeof setTimeout>;
-	timeout?: ReturnType<typeof setTimeout>;
-}
-
-interface WorkerMetadata<TProxy, TTask, TResult> {
-	id: number;
-	proxy: TProxy;
-	worker: Worker;
-	taskCount: number;
-	createdAt: number;
-	activeTasks: Set<ScheduledTask<TTask, TResult>>;
-	markedForTermination: boolean;
-	retirementReason?: "lifetime" | "max-tasks";
-	idleTimer?: ReturnType<typeof setTimeout>;
-	idleDeadline?: number;
-	lifetimeTimer?: ReturnType<typeof setTimeout>;
-	failureHandler: (event: Event) => void;
-	failureEventTypes: string[];
-}
-
-interface TerminationRecord {
-	worker: Worker;
-	workerId: number | undefined;
-	attempts: number;
-	exhausted: boolean;
-	retryTimer?: ReturnType<typeof setTimeout>;
-	attemptTimers: Set<ReturnType<typeof setTimeout>>;
-}
-
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
-const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_TERMINATION_RETRY_ATTEMPTS = 3;
-const DEFAULT_TERMINATION_RETRY_DELAY_MS = 100;
-const DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS = 5_000;
-
-function monotonicNow(): number {
-	return typeof globalThis.performance?.now === "function"
-		? globalThis.performance.now()
-		: Date.now();
-}
-
-function assertPositiveInteger(value: number, name: string): void {
-	if (!Number.isSafeInteger(value) || value < 1) {
-		throw new RangeError(`${name} must be at least 1 and a safe integer`);
-	}
-}
-
-function assertNonNegativeInteger(value: number, name: string): void {
-	if (!Number.isSafeInteger(value) || value < 0) {
-		throw new RangeError(`${name} must be a non-negative safe integer`);
-	}
-}
-
-function assertPositiveDuration(value: number | undefined, name: string): void {
-	if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
-		throw new RangeError(`${name} must be a positive finite number`);
-	}
-}
-
 /** A lazy, bounded pool for proxying calls to Web Workers. */
 export class WorkerPool<
 	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
@@ -415,17 +266,10 @@ export class WorkerPool<
 	private readonly proxyCleanup?: (proxy: TProxy) => void;
 	private readonly terminationFailureWorkerBuffer: number;
 	private readonly physicalWorkerLimit: number;
-	private readonly terminationRetryAttempts: number;
-	private readonly terminationRetryDelayMs: number;
-	private readonly terminationAttemptTimeoutMs: number;
-	private readonly workerTerminator?: WorkerTerminator;
-	private readonly onWorkerTerminationError?: (
-		error: WorkerTerminationError,
-	) => void;
+	private readonly termination: TerminationController;
 
 	private workers: WorkerMetadata<TProxy, TTask, TResult>[] = [];
-	private queue: ScheduledTask<TTask, TResult>[] = [];
-	private readonly quarantinedWorkers = new Map<Worker, TerminationRecord>();
+	private readonly queue = new SchedulerQueue<TTask, TResult>();
 	private nextWorkerId = 0;
 	private nextTaskSequence = 0;
 	private accepting = true;
@@ -433,7 +277,6 @@ export class WorkerPool<
 	private terminationStarted = false;
 	private scheduling = false;
 	private shutdownResolved = false;
-	private terminationFailures = 0;
 	private submittedTasks = 0;
 	private startedTasks = 0;
 	private completedTasks = 0;
@@ -536,14 +379,33 @@ export class WorkerPool<
 		this.proxyCleanup = options.proxyCleanup;
 		this.terminationFailureWorkerBuffer = terminationFailureWorkerBuffer;
 		this.physicalWorkerLimit = options.size + terminationFailureWorkerBuffer;
-		this.terminationRetryAttempts = terminationRetryAttempts;
-		this.terminationRetryDelayMs =
-			options.terminationRetryDelayMs ?? DEFAULT_TERMINATION_RETRY_DELAY_MS;
-		this.terminationAttemptTimeoutMs =
-			options.terminationAttemptTimeoutMs ??
-			DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS;
-		this.workerTerminator = options.workerTerminator;
-		this.onWorkerTerminationError = options.onWorkerTerminationError;
+		this.termination = new TerminationController({
+			retryAttempts: terminationRetryAttempts,
+			retryDelayMs:
+				options.terminationRetryDelayMs ?? DEFAULT_TERMINATION_RETRY_DELAY_MS,
+			attemptTimeoutMs:
+				options.terminationAttemptTimeoutMs ??
+				DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS,
+			workerTerminator: options.workerTerminator,
+			onFailure: (error) => {
+				this._emit({
+					type: "worker-termination-failed",
+					timestamp: Date.now(),
+					workerId: error.workerId,
+					attempt: error.attempt,
+					exhausted: error.exhausted,
+				});
+				try {
+					options.onWorkerTerminationError?.(error);
+				} catch {
+					// Failure observers are isolated from scheduler control flow.
+				}
+			},
+			onStateChange: () => {
+				this._next();
+				this._updateStats();
+			},
+		});
 		this._updateStats();
 	}
 
@@ -594,7 +456,7 @@ export class WorkerPool<
 		this.terminationStarted = true;
 		const reason = new WorkerPoolTerminatedError();
 
-		for (const item of this.queue.splice(0)) {
+		for (const item of this.queue.drain()) {
 			this._settleTask(item, false, reason);
 		}
 		for (const worker of [...this.workers]) {
@@ -610,10 +472,7 @@ export class WorkerPool<
 	/** Returns a consistent snapshot of pool statistics. */
 	public getStats(): WorkerPoolStats {
 		const now = monotonicNow();
-		const oldestQueuedAt = this.queue.reduce(
-			(oldest, item) => Math.min(oldest, item.enqueuedAt),
-			Number.POSITIVE_INFINITY,
-		);
+		const oldestQueuedAt = this.queue.oldestEnqueuedAt();
 		const runningTasks = this.workers.reduce(
 			(sum, worker) => sum + worker.activeTasks.size,
 			0,
@@ -624,8 +483,7 @@ export class WorkerPool<
 				worker.activeTasks.size < this.maxConcurrentTasksPerWorker &&
 				!this._hasExpired(worker),
 		).length;
-		const physicalWorkerCount =
-			this.workers.length + this.quarantinedWorkers.size;
+		const physicalWorkerCount = this.workers.length + this.termination.count;
 		const uncreatedCapacity = this.terminationStarted
 			? 0
 			: Math.max(
@@ -653,12 +511,12 @@ export class WorkerPool<
 				? Math.max(0, this.maxQueueSize - this.queue.length)
 				: null,
 			oldestQueuedTaskAgeMs:
-				this.queue.length === 0 ? null : Math.max(0, now - oldestQueuedAt),
+				oldestQueuedAt === null ? null : Math.max(0, now - oldestQueuedAt),
 			workers: physicalWorkerCount,
 			healthyWorkers: this.workers.length,
-			quarantinedWorkers: this.quarantinedWorkers.size,
+			quarantinedWorkers: this.termination.count,
 			terminationFailureWorkerBuffer: this.terminationFailureWorkerBuffer,
-			terminationFailures: this.terminationFailures,
+			terminationFailures: this.termination.failures,
 			idleWorkers: this.workers.filter(
 				(worker) => worker.activeTasks.size === 0,
 			).length,
@@ -740,29 +598,15 @@ export class WorkerPool<
 	}
 
 	private _insertQueuedTask(item: ScheduledTask<TTask, TResult>): void {
-		const index = this.queue.findIndex(
-			(candidate) => candidate.priority < item.priority,
-		);
-		if (index === -1) this.queue.push(item);
-		else this.queue.splice(index, 0, item);
+		this.queue.insert(item);
 	}
 
 	private _enforceQueueLimit(submitted: ScheduledTask<TTask, TResult>): void {
-		while (this.queue.length > this.maxQueueSize) {
-			let rejected = submitted;
-			let dropped = false;
-			if (
-				this.queue.indexOf(submitted) === -1 ||
-				this.queueOverflowPolicy === "drop-oldest"
-			) {
-				rejected = this.queue.reduce((oldest, candidate) =>
-					candidate.sequence < oldest.sequence ? candidate : oldest,
-				);
-				dropped = this.queueOverflowPolicy === "drop-oldest";
-			}
-			const index = this.queue.indexOf(rejected);
-			if (index === -1) break;
-			this.queue.splice(index, 1);
+		for (const { task: rejected, dropped } of this.queue.enforceLimit(
+			submitted,
+			this.maxQueueSize,
+			this.queueOverflowPolicy,
+		)) {
 			this._settleTask(
 				rejected,
 				false,
@@ -773,8 +617,7 @@ export class WorkerPool<
 
 	private _abortTask(item: ScheduledTask<TTask, TResult>): void {
 		if (item.settled) return;
-		const index = this.queue.indexOf(item);
-		if (index !== -1) this.queue.splice(index, 1);
+		this.queue.remove(item);
 		const isRunning = this.workers.some((worker) =>
 			worker.activeTasks.has(item),
 		);
@@ -794,8 +637,7 @@ export class WorkerPool<
 		if (timeoutMs === undefined) return;
 		const deadline = monotonicNow() + timeoutMs;
 		const schedule = () => {
-			const index = this.queue.indexOf(item);
-			if (index === -1) return;
+			if (!this.queue.contains(item)) return;
 			const remaining = deadline - monotonicNow();
 			if (remaining > 0) {
 				item.queueTimeout = setTimeout(
@@ -805,7 +647,7 @@ export class WorkerPool<
 				return;
 			}
 			item.queueTimeout = undefined;
-			this.queue.splice(index, 1);
+			this.queue.remove(item);
 			this._settleTask(item, false, new WorkerQueueTimeoutError(timeoutMs));
 			this._updateStats();
 		};
@@ -827,7 +669,7 @@ export class WorkerPool<
 				} catch (error) {
 					// A broken factory affects the current backlog, but later submissions
 					// may retry after the client fixes a transient resource problem.
-					for (const item of this.queue.splice(0)) {
+					for (const item of this.queue.drain()) {
 						this._settleTask(item, false, error);
 					}
 					break;
@@ -865,8 +707,7 @@ export class WorkerPool<
 			}
 		}
 
-		const physicalWorkerCount =
-			this.workers.length + this.quarantinedWorkers.size;
+		const physicalWorkerCount = this.workers.length + this.termination.count;
 		const canCreate =
 			this.workers.length < this.size &&
 			physicalWorkerCount < this.physicalWorkerLimit;
@@ -919,8 +760,8 @@ export class WorkerPool<
 		try {
 			proxy = this.proxyFactory(worker);
 		} catch (error) {
-			const termination = this._quarantineWorker(worker);
-			this._attemptTermination(termination);
+			const termination = this.termination.quarantine(worker);
+			this.termination.attempt(termination);
 			throw error;
 		}
 
@@ -954,10 +795,10 @@ export class WorkerPool<
 				metadata.failureEventTypes.push(type);
 			}
 		} catch (error) {
-			const termination = this._quarantineWorker(worker, id);
+			const termination = this.termination.quarantine(worker, id);
 			this._removeFailureListeners(metadata);
 			this._cleanupProxy(proxy);
-			this._attemptTermination(termination);
+			this.termination.attempt(termination);
 			throw error;
 		}
 		return metadata;
@@ -1238,7 +1079,7 @@ export class WorkerPool<
 		if (index === -1 || (!force && worker.activeTasks.size > 0)) return;
 
 		this.workers.splice(index, 1);
-		const termination = this._quarantineWorker(worker.worker, worker.id);
+		const termination = this.termination.quarantine(worker.worker, worker.id);
 		this._clearIdleTimer(worker);
 		if (worker.lifetimeTimer !== undefined) clearTimeout(worker.lifetimeTimer);
 		worker.lifetimeTimer = undefined;
@@ -1250,7 +1091,7 @@ export class WorkerPool<
 			workerId: worker.id,
 			reason,
 		});
-		this._attemptTermination(termination);
+		this.termination.attempt(termination);
 	}
 
 	private _containsWorker(
@@ -1286,181 +1127,22 @@ export class WorkerPool<
 		}
 	}
 
-	private _quarantineWorker(
-		worker: Worker,
-		workerId?: number,
-	): TerminationRecord {
-		const existing = this.quarantinedWorkers.get(worker);
-		if (existing) return existing;
-
-		const record: TerminationRecord = {
-			worker,
-			workerId,
-			attempts: 0,
-			exhausted: false,
-			attemptTimers: new Set(),
-		};
-		this.quarantinedWorkers.set(worker, record);
-		return record;
-	}
-
-	private _attemptTermination(record: TerminationRecord): void {
-		if (this.quarantinedWorkers.get(record.worker) !== record) return;
-		record.retryTimer = undefined;
-		record.exhausted = false;
-		record.attempts++;
-
-		let result: ReturnType<WorkerTerminator>;
-		try {
-			result = this.workerTerminator
-				? this.workerTerminator(record.worker)
-				: record.worker.terminate();
-		} catch (error) {
-			this._recordTerminationFailure(record, error);
-			return;
-		}
-
-		let then: unknown;
-		try {
-			then =
-				result !== null &&
-				(typeof result === "object" || typeof result === "function")
-					? (result as PromiseLike<unknown>).then
-					: undefined;
-		} catch (error) {
-			this._recordTerminationFailure(record, error);
-			return;
-		}
-
-		if (typeof then !== "function") {
-			this._confirmTermination(record);
-			return;
-		}
-
-		let attemptFinished = false;
-		const deadline = monotonicNow() + this.terminationAttemptTimeoutMs;
-		let timeout!: ReturnType<typeof setTimeout>;
-		const handleTimeout = () => {
-			record.attemptTimers.delete(timeout);
-			if (attemptFinished) return;
-			const remaining = deadline - monotonicNow();
-			if (remaining > 0) {
-				timeout = setTimeout(
-					handleTimeout,
-					Math.min(remaining, MAX_TIMER_DELAY_MS),
-				);
-				record.attemptTimers.add(timeout);
-				return;
-			}
-			attemptFinished = true;
-			this._recordTerminationFailure(
-				record,
-				new Error(
-					`Termination attempt timed out after ${this.terminationAttemptTimeoutMs}ms`,
-				),
-			);
-		};
-		timeout = setTimeout(
-			handleTimeout,
-			Math.min(this.terminationAttemptTimeoutMs, MAX_TIMER_DELAY_MS),
-		);
-		record.attemptTimers.add(timeout);
-
-		const terminationPromise = new Promise<unknown>((resolve, reject) => {
-			Reflect.apply(then, result, [resolve, reject]);
-		});
-		void terminationPromise.then(
-			() => {
-				clearTimeout(timeout);
-				record.attemptTimers.delete(timeout);
-				if (attemptFinished) {
-					// A late success is still valid confirmation that the worker is gone.
-					this._confirmTermination(record);
-					return;
-				}
-				attemptFinished = true;
-				this._confirmTermination(record);
-			},
-			(error) => {
-				clearTimeout(timeout);
-				record.attemptTimers.delete(timeout);
-				if (attemptFinished) return;
-				attemptFinished = true;
-				this._recordTerminationFailure(record, error);
-			},
-		);
-	}
-
-	private _confirmTermination(record: TerminationRecord): void {
-		if (this.quarantinedWorkers.get(record.worker) !== record) return;
-		if (record.retryTimer !== undefined) clearTimeout(record.retryTimer);
-		for (const timer of record.attemptTimers) clearTimeout(timer);
-		record.attemptTimers.clear();
-		this.quarantinedWorkers.delete(record.worker);
-		this._next();
-		this._updateStats();
-	}
-
-	private _recordTerminationFailure(
-		record: TerminationRecord,
-		cause: unknown,
-	): void {
-		if (this.quarantinedWorkers.get(record.worker) !== record) return;
-		this.terminationFailures++;
-		const exhausted = record.attempts > this.terminationRetryAttempts;
-		record.exhausted = exhausted;
-		const error = new WorkerTerminationError(
-			record.workerId,
-			record.attempts,
-			exhausted,
-			cause,
-		);
-		this._emit({
-			type: "worker-termination-failed",
-			timestamp: Date.now(),
-			workerId: record.workerId,
-			attempt: record.attempts,
-			exhausted,
-		});
-		try {
-			this.onWorkerTerminationError?.(error);
-		} catch {
-			// Failure observers are isolated from scheduler control flow.
-		}
-
-		if (!exhausted) {
-			const exponent = Math.min(record.attempts - 1, 30);
-			const retryDelay = Math.min(
-				this.terminationRetryDelayMs * 2 ** exponent,
-				MAX_TIMER_DELAY_MS,
-			);
-			record.retryTimer = setTimeout(
-				() => this._attemptTermination(record),
-				retryDelay,
-			);
-		}
-
-		this._next();
-		this._updateStats();
-	}
-
 	private _rejectQueueIfPermanentlyExhausted(): void {
 		if (
 			this.terminationStarted ||
 			this.queue.length === 0 ||
 			this.workers.length > 0 ||
-			this.workers.length + this.quarantinedWorkers.size <
-				this.physicalWorkerLimit ||
-			[...this.quarantinedWorkers.values()].some((record) => !record.exhausted)
+			this.workers.length + this.termination.count < this.physicalWorkerLimit ||
+			this.termination.hasRetryableWorker()
 		) {
 			return;
 		}
 
 		const error = new WorkerPoolCapacityError(
 			this.physicalWorkerLimit,
-			this.quarantinedWorkers.size,
+			this.termination.count,
 		);
-		for (const item of this.queue.splice(0)) {
+		for (const item of this.queue.drain()) {
 			this._settleTask(item, false, error);
 		}
 	}
@@ -1479,13 +1161,13 @@ export class WorkerPool<
 			this.terminationStarted &&
 			!this.shutdownResolved &&
 			this.workers.length === 0 &&
-			[...this.quarantinedWorkers.values()].every((record) => record.exhausted)
+			this.termination.allExhausted()
 		) {
 			this.shutdownResolved = true;
 			this.resolveTerminated({
-				confirmed: this.quarantinedWorkers.size === 0,
-				unconfirmedWorkers: this.quarantinedWorkers.size,
-				terminationFailures: this.terminationFailures,
+				confirmed: this.termination.count === 0,
+				unconfirmedWorkers: this.termination.count,
+				terminationFailures: this.termination.failures,
 			});
 		}
 		if (!this.onUpdate) return;
