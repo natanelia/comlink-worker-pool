@@ -27,7 +27,7 @@
 		"benchmark": "bun run build && bun run benchmark:runtime && bun run benchmark:bundle",
 		"verify": "bun run lint && bun run typecheck && bun run test && bun run build && bun run benchmark:runtime && bun run benchmark:bundle && bun run playground:build && bun run test:packages",
 		"changeset": "changeset",
-		"version": "changeset version && bun install",
+		"version": "changeset version && biome format --write packages/comlink-worker-pool/package.json packages/comlink-worker-pool-react/package.json && bun install",
 		"release": "bun run verify && changeset publish"
 	},
 	"private": true,
