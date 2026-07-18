@@ -7,6 +7,19 @@ export type WorkerFactory = () => Worker;
 // biome-ignore lint/suspicious/noConfusingVoidType: sync terminators naturally return void.
 export type WorkerTerminator = (worker: Worker) => void | PromiseLike<unknown>;
 
+/** Policy applied when a submitted task would exceed maxQueueSize. */
+export type QueueOverflowPolicy = "reject" | "drop-oldest";
+
+/** Per-call scheduling controls for WorkerPool.run(). */
+export interface WorkerTaskOptions {
+	/** Cancels the caller's wait without forcibly interrupting worker code. */
+	signal?: AbortSignal;
+	/** Higher values run before lower values; equal priorities remain FIFO. */
+	priority?: number;
+	/** Maximum time spent waiting in the queue; false disables the pool default. */
+	queueTimeoutMs?: number | false;
+}
+
 /** Statistics describing the current state of a worker pool. */
 export interface WorkerPoolStats {
 	/** Configured maximum number of scheduler-managed, non-quarantined workers. */
@@ -61,6 +74,12 @@ export interface WorkerPoolOptions<
 	maxWorkerLifetimeMs?: number;
 	/** Maximum concurrent tasks per worker. Defaults to 1. */
 	maxConcurrentTasksPerWorker?: number;
+	/** Maximum waiting tasks; running tasks do not count. Defaults to unlimited. */
+	maxQueueSize?: number;
+	/** Behavior when maxQueueSize would be exceeded. Defaults to reject. */
+	queueOverflowPolicy?: QueueOverflowPolicy;
+	/** Default maximum queue wait; false or undefined disables it. */
+	queueTimeoutMs?: number | false;
 	/**
 	 * Rejects a task that runs longer than this duration and recycles its worker.
 	 * Defaults to five minutes because this is the only portable way to recover
@@ -161,8 +180,49 @@ export class WorkerPoolCapacityError extends Error {
 	}
 }
 
+/** Error returned when a task cannot enter a full queue or is evicted from it. */
+export class WorkerPoolQueueFullError extends Error {
+	readonly maxQueueSize: number;
+	readonly dropped: boolean;
+
+	constructor(maxQueueSize: number, dropped = false) {
+		super(
+			dropped
+				? `Worker task was dropped because the queue limit of ${maxQueueSize} was reached`
+				: `Worker pool queue limit of ${maxQueueSize} was reached`,
+		);
+		this.name = "WorkerPoolQueueFullError";
+		this.maxQueueSize = maxQueueSize;
+		this.dropped = dropped;
+	}
+}
+
+/** Error returned when a task waits in the queue beyond its deadline. */
+export class WorkerQueueTimeoutError extends Error {
+	readonly timeoutMs: number;
+
+	constructor(timeoutMs: number) {
+		super(`Worker task queue wait timed out after ${timeoutMs}ms`);
+		this.name = "WorkerQueueTimeoutError";
+		this.timeoutMs = timeoutMs;
+	}
+}
+
+/** Error returned when an AbortSignal cancels a scheduled task. */
+export class WorkerTaskAbortedError extends Error {
+	constructor(cause?: unknown) {
+		super("Worker task was aborted", { cause });
+		this.name = "WorkerTaskAbortedError";
+	}
+}
+
 interface ScheduledTask<TTask, TResult> extends Task<TTask, TResult> {
 	settled: boolean;
+	priority: number;
+	sequence: number;
+	signal?: AbortSignal;
+	abortHandler?: () => void;
+	queueTimeout?: ReturnType<typeof setTimeout>;
 	timeout?: ReturnType<typeof setTimeout>;
 }
 
@@ -238,6 +298,9 @@ export class WorkerPool<
 	private readonly maxTasksPerWorker?: number;
 	private readonly maxWorkerLifetimeMs?: number;
 	private readonly maxConcurrentTasksPerWorker: number;
+	private readonly maxQueueSize: number;
+	private readonly queueOverflowPolicy: QueueOverflowPolicy;
+	private readonly queueTimeoutMs?: number;
 	private readonly taskTimeoutMs?: number;
 	private readonly proxyCleanup?: (proxy: TProxy) => void;
 	private readonly terminationFailureWorkerBuffer: number;
@@ -254,6 +317,7 @@ export class WorkerPool<
 	private queue: ScheduledTask<TTask, TResult>[] = [];
 	private readonly quarantinedWorkers = new Map<Worker, TerminationRecord>();
 	private nextWorkerId = 0;
+	private nextTaskSequence = 0;
 	private terminated = false;
 	private draining = false;
 	private terminationFailures = 0;
@@ -268,8 +332,24 @@ export class WorkerPool<
 		if (options.maxTasksPerWorker !== undefined) {
 			assertPositiveInteger(options.maxTasksPerWorker, "maxTasksPerWorker");
 		}
+		if (options.maxQueueSize !== undefined) {
+			assertNonNegativeInteger(options.maxQueueSize, "maxQueueSize");
+		}
+		if (
+			options.queueOverflowPolicy !== undefined &&
+			options.queueOverflowPolicy !== "reject" &&
+			options.queueOverflowPolicy !== "drop-oldest"
+		) {
+			throw new RangeError(
+				'queueOverflowPolicy must be "reject" or "drop-oldest"',
+			);
+		}
 		assertPositiveDuration(options.workerIdleTimeoutMs, "workerIdleTimeoutMs");
 		assertPositiveDuration(options.maxWorkerLifetimeMs, "maxWorkerLifetimeMs");
+		assertPositiveDuration(
+			options.queueTimeoutMs === false ? undefined : options.queueTimeoutMs,
+			"queueTimeoutMs",
+		);
 		assertPositiveDuration(
 			options.taskTimeoutMs === false ? undefined : options.taskTimeoutMs,
 			"taskTimeoutMs",
@@ -309,6 +389,10 @@ export class WorkerPool<
 		this.maxTasksPerWorker = options.maxTasksPerWorker;
 		this.maxWorkerLifetimeMs = options.maxWorkerLifetimeMs;
 		this.maxConcurrentTasksPerWorker = options.maxConcurrentTasksPerWorker ?? 1;
+		this.maxQueueSize = options.maxQueueSize ?? Number.POSITIVE_INFINITY;
+		this.queueOverflowPolicy = options.queueOverflowPolicy ?? "reject";
+		this.queueTimeoutMs =
+			options.queueTimeoutMs === false ? undefined : options.queueTimeoutMs;
 		this.taskTimeoutMs =
 			options.taskTimeoutMs === false
 				? undefined
@@ -338,6 +422,17 @@ export class WorkerPool<
 			},
 		};
 		return new Proxy(Object.create(null), handler) as TProxy;
+	}
+
+	/** Schedules one method call with explicit queueing and cancellation controls. */
+	public run<K extends keyof TProxy>(
+		method: K,
+		args: Parameters<TProxy[K]>,
+		options?: WorkerTaskOptions,
+	): Promise<Awaited<ReturnType<TProxy[K]>>> {
+		return this._run({ method, args } as unknown as TTask, options) as Promise<
+			Awaited<ReturnType<TProxy[K]>>
+		>;
 	}
 
 	/** Permanently closes the pool, rejects work, and starts bounded worker termination. */
@@ -400,16 +495,129 @@ export class WorkerPool<
 		};
 	}
 
-	private _run(task: TTask): Promise<TResult> {
+	private _run(task: TTask, options: WorkerTaskOptions = {}): Promise<TResult> {
 		if (this.terminated) {
 			return Promise.reject(new WorkerPoolTerminatedError());
 		}
+		const priority = options.priority ?? 0;
+		if (!Number.isFinite(priority)) {
+			return Promise.reject(new RangeError("priority must be a finite number"));
+		}
+		const queueTimeoutMs =
+			options.queueTimeoutMs === false
+				? undefined
+				: (options.queueTimeoutMs ?? this.queueTimeoutMs);
+		try {
+			assertPositiveDuration(queueTimeoutMs, "queueTimeoutMs");
+		} catch (error) {
+			return Promise.reject(error);
+		}
+		if (options.signal?.aborted) {
+			return Promise.reject(new WorkerTaskAbortedError(options.signal.reason));
+		}
 
 		return new Promise<TResult>((resolve, reject) => {
-			this.queue.push({ task, resolve, reject, settled: false });
+			const item: ScheduledTask<TTask, TResult> = {
+				task,
+				resolve,
+				reject,
+				settled: false,
+				priority,
+				sequence: this.nextTaskSequence++,
+				signal: options.signal,
+			};
+			if (item.signal) {
+				item.abortHandler = () => this._abortTask(item);
+				item.signal.addEventListener("abort", item.abortHandler, {
+					once: true,
+				});
+				if (item.signal.aborted) {
+					this._abortTask(item);
+					return;
+				}
+			}
+			this._insertQueuedTask(item);
+			this._startQueueTimer(item, queueTimeoutMs);
 			this._next();
+			this._enforceQueueLimit(item);
 			this._updateStats();
 		});
+	}
+
+	private _insertQueuedTask(item: ScheduledTask<TTask, TResult>): void {
+		const index = this.queue.findIndex(
+			(candidate) => candidate.priority < item.priority,
+		);
+		if (index === -1) this.queue.push(item);
+		else this.queue.splice(index, 0, item);
+	}
+
+	private _enforceQueueLimit(submitted: ScheduledTask<TTask, TResult>): void {
+		while (this.queue.length > this.maxQueueSize) {
+			let rejected = submitted;
+			let dropped = false;
+			if (
+				this.queue.indexOf(submitted) === -1 ||
+				this.queueOverflowPolicy === "drop-oldest"
+			) {
+				rejected = this.queue.reduce((oldest, candidate) =>
+					candidate.sequence < oldest.sequence ? candidate : oldest,
+				);
+				dropped = this.queueOverflowPolicy === "drop-oldest";
+			}
+			const index = this.queue.indexOf(rejected);
+			if (index === -1) break;
+			this.queue.splice(index, 1);
+			this._settleTask(
+				rejected,
+				false,
+				new WorkerPoolQueueFullError(this.maxQueueSize, dropped),
+			);
+		}
+	}
+
+	private _abortTask(item: ScheduledTask<TTask, TResult>): void {
+		if (item.settled) return;
+		const index = this.queue.indexOf(item);
+		if (index !== -1) this.queue.splice(index, 1);
+		const isRunning = this.workers.some((worker) =>
+			worker.activeTasks.has(item),
+		);
+		this._settleTask(
+			item,
+			false,
+			new WorkerTaskAbortedError(item.signal?.reason),
+			isRunning,
+		);
+		this._updateStats();
+	}
+
+	private _startQueueTimer(
+		item: ScheduledTask<TTask, TResult>,
+		timeoutMs: number | undefined,
+	): void {
+		if (timeoutMs === undefined) return;
+		const deadline = monotonicNow() + timeoutMs;
+		const schedule = () => {
+			const index = this.queue.indexOf(item);
+			if (index === -1) return;
+			const remaining = deadline - monotonicNow();
+			if (remaining > 0) {
+				item.queueTimeout = setTimeout(
+					schedule,
+					Math.min(remaining, MAX_TIMER_DELAY_MS),
+				);
+				return;
+			}
+			item.queueTimeout = undefined;
+			this.queue.splice(index, 1);
+			this._settleTask(item, false, new WorkerQueueTimeoutError(timeoutMs));
+			this._updateStats();
+		};
+		item.queueTimeout = setTimeout(
+			schedule,
+			Math.min(timeoutMs, MAX_TIMER_DELAY_MS),
+		);
 	}
 
 	private _next(): void {
@@ -442,6 +650,7 @@ export class WorkerPool<
 	}
 
 	private _getAvailableWorker(): WorkerMetadata<TProxy, TTask, TResult> | null {
+		let leastLoaded: WorkerMetadata<TProxy, TTask, TResult> | null = null;
 		for (const worker of [...this.workers]) {
 			if (this._hasExpired(worker)) {
 				worker.markedForTermination = true;
@@ -450,22 +659,37 @@ export class WorkerPool<
 			}
 			if (
 				!worker.markedForTermination &&
-				worker.activeTasks.size < this.maxConcurrentTasksPerWorker
+				worker.activeTasks.size < this.maxConcurrentTasksPerWorker &&
+				(leastLoaded === null ||
+					worker.activeTasks.size < leastLoaded.activeTasks.size)
 			) {
-				return worker;
+				leastLoaded = worker;
 			}
 		}
 
 		const physicalWorkerCount =
 			this.workers.length + this.quarantinedWorkers.size;
-		if (
-			this.workers.length >= this.size ||
-			physicalWorkerCount >= this.physicalWorkerLimit
-		) {
-			return null;
+		const canCreate =
+			this.workers.length < this.size &&
+			physicalWorkerCount < this.physicalWorkerLimit;
+		if (!canCreate || leastLoaded?.activeTasks.size === 0) {
+			return leastLoaded;
 		}
 
-		const worker = this._createWorker();
+		let worker: WorkerMetadata<TProxy, TTask, TResult>;
+		try {
+			worker = this._createWorker();
+		} catch (error) {
+			if (
+				leastLoaded &&
+				this._containsWorker(leastLoaded) &&
+				!leastLoaded.markedForTermination &&
+				leastLoaded.activeTasks.size < this.maxConcurrentTasksPerWorker
+			) {
+				return leastLoaded;
+			}
+			throw error;
+		}
 		this.workers.push(worker);
 		if (this.terminated) {
 			this._removeWorker(worker, true);
@@ -540,6 +764,8 @@ export class WorkerPool<
 		worker: WorkerMetadata<TProxy, TTask, TResult>,
 		item: ScheduledTask<TTask, TResult>,
 	): void {
+		if (item.queueTimeout !== undefined) clearTimeout(item.queueTimeout);
+		item.queueTimeout = undefined;
 		this._clearIdleTimer(worker);
 		worker.activeTasks.add(item);
 		worker.taskCount++;
@@ -609,11 +835,20 @@ export class WorkerPool<
 		item: ScheduledTask<TTask, TResult>,
 		succeeded: boolean,
 		value: unknown,
+		preserveTaskTimer = false,
 	): void {
+		if (item.queueTimeout !== undefined) clearTimeout(item.queueTimeout);
+		item.queueTimeout = undefined;
+		if (!preserveTaskTimer) {
+			if (item.timeout !== undefined) clearTimeout(item.timeout);
+			item.timeout = undefined;
+		}
+		if (item.abortHandler && item.signal) {
+			item.signal.removeEventListener("abort", item.abortHandler);
+			item.abortHandler = undefined;
+		}
 		if (item.settled) return;
 		item.settled = true;
-		if (item.timeout !== undefined) clearTimeout(item.timeout);
-		item.timeout = undefined;
 		if (succeeded) item.resolve(value as TResult);
 		else item.reject(value);
 	}
@@ -626,7 +861,7 @@ export class WorkerPool<
 		if (timeoutMs === undefined) return;
 		const deadline = monotonicNow() + timeoutMs;
 		const schedule = () => {
-			if (item.settled || !worker.activeTasks.has(item)) return;
+			if (!worker.activeTasks.has(item)) return;
 			const remaining = deadline - monotonicNow();
 			if (remaining > 0) {
 				item.timeout = setTimeout(

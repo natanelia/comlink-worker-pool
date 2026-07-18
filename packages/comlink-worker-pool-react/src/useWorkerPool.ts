@@ -29,6 +29,12 @@ export interface UseWorkerPoolOptions<TProxy extends ProxyDefault> {
 	maxWorkerLifetimeMs?: number;
 	/** Maximum number of concurrent tasks assigned to one worker. */
 	maxConcurrentTasksPerWorker?: number;
+	/** Maximum number of tasks waiting for a worker. */
+	maxQueueSize?: WorkerPoolOptions<TProxy>["maxQueueSize"];
+	/** Behavior when the waiting queue is full. */
+	queueOverflowPolicy?: WorkerPoolOptions<TProxy>["queueOverflowPolicy"];
+	/** Default maximum time a task may wait in the queue. */
+	queueTimeoutMs?: WorkerPoolOptions<TProxy>["queueTimeoutMs"];
 	/** Rejects overlong tasks and recycles their worker (five-minute default). */
 	taskTimeoutMs?: WorkerPoolOptions<TProxy>["taskTimeoutMs"];
 	/** Cleans up resources owned by a worker proxy. */
@@ -109,6 +115,9 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 		maxTasksPerWorker,
 		maxWorkerLifetimeMs,
 		maxConcurrentTasksPerWorker,
+		maxQueueSize,
+		queueOverflowPolicy,
+		queueTimeoutMs,
 		taskTimeoutMs,
 		terminationFailureWorkerBuffer,
 		terminationRetryAttempts,
@@ -146,6 +155,9 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 				maxTasksPerWorker,
 				maxWorkerLifetimeMs,
 				maxConcurrentTasksPerWorker,
+				maxQueueSize,
+				queueOverflowPolicy,
+				queueTimeoutMs,
 				taskTimeoutMs,
 				proxyCleanup: proxyCleanupRef.current,
 				terminationFailureWorkerBuffer,
@@ -187,6 +199,9 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 		maxTasksPerWorker,
 		maxWorkerLifetimeMs,
 		maxConcurrentTasksPerWorker,
+		maxQueueSize,
+		queueOverflowPolicy,
+		queueTimeoutMs,
 		taskTimeoutMs,
 		terminationFailureWorkerBuffer,
 		terminationRetryAttempts,

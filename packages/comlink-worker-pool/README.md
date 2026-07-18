@@ -102,6 +102,9 @@ console.log(pool.getStats());
 | `maxTasksPerWorker`           | `number`                           | Max tasks per worker before termination (optional) |
 | `maxWorkerLifetimeMs`         | `number`                           | Max worker lifetime in milliseconds (optional)   |
 | `maxConcurrentTasksPerWorker` | `number`                           | Max concurrent tasks per worker (optional, defaults to 1) |
+| `maxQueueSize`                | `number`                           | Maximum waiting tasks; defaults to unlimited |
+| `queueOverflowPolicy`         | `"reject" \| "drop-oldest"`     | Full-queue behavior; defaults to `"reject"` |
+| `queueTimeoutMs`              | `number \| false`                  | Default queue-wait deadline; disabled by default |
 | `taskTimeoutMs`               | `number \| false`                   | Task deadline; defaults to 5 minutes, false disables it |
 | `proxyCleanup`                | `(proxy: P) => void`               | Custom proxy cleanup before worker termination (optional) |
 | `terminationFailureWorkerBuffer` | `number`                       | Extra worker slots that preserve capacity after termination failure; defaults to `max(2, floor(size / 2))` |
@@ -115,6 +118,31 @@ console.log(pool.getStats());
 
 - Most callers only need `WorkerPool<WorkerApi>`. Advanced callers can use
   `WorkerPool<TProxy, TTask, TResult>`.
+
+### Controlled Scheduling and Backpressure
+
+`getApi()` remains the simplest way to submit work. Use `run()` when a call
+needs cancellation, priority, or a queue-specific deadline:
+
+```ts
+const controller = new AbortController();
+const result = pool.run("fibAsync", [42], {
+  signal: controller.signal,
+  priority: 10,
+  queueTimeoutMs: 2_000,
+});
+```
+
+Higher priorities run first and equal priorities remain FIFO. `maxQueueSize`
+counts only waiting work. A full queue rejects new work with
+`WorkerPoolQueueFullError`, or evicts its oldest waiting task when
+`queueOverflowPolicy` is `"drop-oldest"`.
+
+Aborting queued work removes it immediately. Aborting active work rejects the
+caller immediately but does not forcibly interrupt worker code, because doing
+so could also destroy unrelated concurrent calls on that worker. The worker
+slot remains occupied until the underlying call finishes or `taskTimeoutMs`
+recycles the worker.
 
 ### Worker Lifecycle Management
 
@@ -279,6 +307,8 @@ export function fibAsync(n: number): number {
 ## API Reference
 
 - `getApi(): P` — Returns a proxy for calling worker methods as if local (recommended).
+- `run(method, args, options)` — Submits a typed call with priority,
+  `AbortSignal`, and queue-deadline controls.
 - `getStats(): WorkerPoolStats` — Returns live stats about the pool.
 - `terminateAll(): void` — Permanently closes the pool, rejects queued and
   active work, releases standard Comlink proxies, and starts bounded

@@ -108,6 +108,9 @@ extra potentially-live workers before degrading capacity. Change
 `reconfigureKey` when replacing `workerTerminator`; callback identity changes
 alone do not recreate the pool.
 
+The core queue controls—`maxQueueSize`, `queueOverflowPolicy`, and
+`queueTimeoutMs`—are also forwarded and recreate the owned pool when changed.
+
 > 💡 **Tip:** Try the [live playground demo](https://natanelia.github.io/comlink-worker-pool/) for a full working example!
 
 ## Get Started Now!
