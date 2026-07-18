@@ -15,9 +15,14 @@
 	"files": ["dist"],
 	"exports": {
 		".": {
-			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js",
-			"require": "./dist/index.cjs"
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
 		}
 	},
 	"sideEffects": false,
@@ -28,7 +33,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"comlink-worker-pool": "workspace:*"
+		"comlink-worker-pool": "^0.0.9"
 	},
 	"devDependencies": {
 		"@happy-dom/global-registrator": "^17.4.4",

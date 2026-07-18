@@ -11,13 +11,16 @@
     "playground:typecheck": "bun run -F comlink-worker-pool-playground typecheck",
     "playground:build": "bun run -F comlink-worker-pool-playground build",
     "playground:dev": "bun run -F comlink-worker-pool-playground dev",
-    "lint": "bun run -F comlink-worker-pool-react -F comlink-worker-pool -F comlink-worker-pool-playground lint",
-    "typecheck": "bun run -F comlink-worker-pool-react -F comlink-worker-pool -F comlink-worker-pool-playground typecheck",
+    "lint": "biome check scripts tests playwright.config.ts && bun run -F comlink-worker-pool-react -F comlink-worker-pool -F comlink-worker-pool-playground lint",
+    "browser:typecheck": "tsc --noEmit -p tests/browser/tsconfig.json",
+    "typecheck": "bun run -F comlink-worker-pool-react -F comlink-worker-pool -F comlink-worker-pool-playground typecheck && bun run browser:typecheck",
     "build": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
     "build:watch": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
     "test": "bun run -F comlink-worker-pool-react -F comlink-worker-pool test",
     "test:exports": "node scripts/smoke-package-exports.cjs",
-    "verify": "bun run lint && bun run typecheck && bun run test && bun run build && bun run playground:build && bun run test:exports",
+    "test:packages": "bun run test:exports && publint packages/comlink-worker-pool && publint packages/comlink-worker-pool-react && attw --pack packages/comlink-worker-pool --profile strict && attw --pack packages/comlink-worker-pool-react --profile strict && node scripts/smoke-package-consumer.mjs",
+    "test:browser": "playwright test",
+    "verify": "bun run lint && bun run typecheck && bun run test && bun run build && bun run playground:build && bun run test:packages",
     "changeset": "changeset",
     "version": "changeset version && bun install",
     "release": "bun run verify && changeset publish"
@@ -29,8 +32,11 @@
     "packages/comlink-worker-pool-react"
   ],
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@biomejs/biome": "1.9.4",
-    "@changesets/cli": "^2.29.2"
+    "@changesets/cli": "^2.29.2",
+    "@playwright/test": "^1.61.1",
+    "publint": "^0.3.21"
   },
   "trustedDependencies": [
     "@biomejs/biome"

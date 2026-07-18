@@ -71,5 +71,23 @@ jobs:
         run: bun run --filter comlink-worker-pool-react build
       - name: Build playground
         run: bun run playground:build
-      - name: Smoke test ESM and CommonJS package exports
-        run: bun run test:exports
+      - name: Validate packed packages and consumer imports
+        run: bun run test:packages
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Install browser engines and system dependencies
+        run: bunx playwright install --with-deps chromium firefox webkit
+      - name: Build publishable packages
+        run: bun run build
+      - name: Test real workers in Chromium, Firefox, and WebKit
+        run: bun run test:browser
