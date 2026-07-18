@@ -24,7 +24,7 @@ function App() {
 	const [reverseText, setReverseText] = useState("");
 	const [logs, setLogs] = useState<{ key: string; text: string }[]>([]);
 	const logsListRef = useRef<HTMLUListElement>(null);
-	
+
 	// New state for concurrent execution configuration
 	const [poolSize, setPoolSize] = useState(navigator.hardwareConcurrency || 4);
 	const [maxConcurrentTasks, setMaxConcurrentTasks] = useState(1);
@@ -54,22 +54,25 @@ function App() {
 	// Function to recreate pool when configuration changes
 	const recreatePool = async () => {
 		if (!pool) return;
-		
+
 		setIsRecreatingPool(true);
 		pool.terminateAll();
-		
+
 		// Small delay to ensure cleanup
-		await new Promise(resolve => setTimeout(resolve, 100));
-		
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
 		const newPool = createPool();
 		setPool(newPool);
 		setStats(newPool.getStats());
 		setIsRecreatingPool(false);
-		
-		setLogs(prev => [...prev, {
-			key: Date.now().toString(),
-			text: `🔄 Pool recreated: ${poolSize} workers, ${maxConcurrentTasks} max concurrent tasks per worker`
-		}]);
+
+		setLogs((prev) => [
+			...prev,
+			{
+				key: Date.now().toString(),
+				text: `🔄 Pool recreated: ${poolSize} workers, ${maxConcurrentTasks} max concurrent tasks per worker`,
+			},
+		]);
 	};
 
 	const [stats, setStats] = useState<WorkerPoolStats>({
@@ -77,6 +80,10 @@ function App() {
 		available: 0,
 		queue: 0,
 		workers: 0,
+		healthyWorkers: 0,
+		quarantinedWorkers: 0,
+		terminationFailureWorkerBuffer: 0,
+		terminationFailures: 0,
 		idleWorkers: 0,
 		runningTasks: 0,
 		availableForConcurrency: 0,
@@ -146,12 +153,12 @@ function App() {
 		const api = pool.getApi();
 		const urls = [
 			"https://api.example.com/data1",
-			"https://api.example.com/data2", 
+			"https://api.example.com/data2",
 			"https://api.example.com/data3",
 			"https://jsonplaceholder.typicode.com/posts/1",
 			"https://jsonplaceholder.typicode.com/posts/2",
 		];
-		
+
 		const tasks: Promise<void>[] = [];
 		for (let i = 0; i < taskCount; i++) {
 			const url = urls[i % urls.length];
@@ -176,12 +183,12 @@ function App() {
 		const api = pool.getApi();
 		const dataItems = [
 			"user data batch 1",
-			"analytics data batch 2", 
+			"analytics data batch 2",
 			"metrics data batch 3",
 			"logs data batch 4",
 			"events data batch 5",
 		];
-		
+
 		const tasks: Promise<void>[] = [];
 		for (let i = 0; i < taskCount; i++) {
 			const data = dataItems[i % dataItems.length];
@@ -214,7 +221,7 @@ function App() {
 				<h1 className="mb-8 text-5xl font-extrabold tracking-tight text-center text-organic-400 font-display drop-shadow">
 					Comlink Worker Pool Playground
 				</h1>
-				
+
 				{/* Pool Configuration Section */}
 				<div className="mb-8 p-6 bg-organic-50/90 border-2 border-organic-200 rounded-2xl shadow-lg">
 					<h2 className="mb-4 text-2xl font-bold text-organic-400 font-display">
@@ -249,6 +256,7 @@ function App() {
 						</label>
 						<div className="flex items-end">
 							<button
+								type="button"
 								onClick={recreatePool}
 								disabled={isRecreatingPool}
 								className="w-full px-4 py-2 text-base font-semibold transition shadow text-organic-50 bg-organic-400 rounded-lg hover:bg-organic-500 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -258,8 +266,13 @@ function App() {
 						</div>
 					</div>
 					<div className="mt-3 text-xs text-organic-500">
-						<p><strong>Pool Size:</strong> Number of worker threads in the pool</p>
-						<p><strong>Max Concurrent Tasks:</strong> How many tasks each worker can handle simultaneously (great for I/O-bound operations)</p>
+						<p>
+							<strong>Pool Size:</strong> Number of worker threads in the pool
+						</p>
+						<p>
+							<strong>Max Concurrent Tasks:</strong> How many tasks each worker
+							can handle simultaneously (great for I/O-bound operations)
+						</p>
 					</div>
 				</div>
 
@@ -355,7 +368,8 @@ function App() {
 							Calculate Fib (n)
 						</button>
 						<span className="mt-1 text-xs text-organic-500">
-							Runs <b>{taskCount}</b> parallel Fibonacci calculations. Best with maxConcurrent=1.
+							Runs <b>{taskCount}</b> parallel Fibonacci calculations. Best with
+							maxConcurrent=1.
 						</span>
 					</div>
 
@@ -388,7 +402,8 @@ function App() {
 							Count Words
 						</button>
 						<span className="mt-1 text-xs text-organic-500">
-							Counts words with simulated delay. Benefits from concurrent execution.
+							Counts words with simulated delay. Benefits from concurrent
+							execution.
 						</span>
 					</div>
 
@@ -421,7 +436,8 @@ function App() {
 							Reverse String
 						</button>
 						<span className="mt-1 text-xs text-organic-500">
-							Reverses text with simulated delay. Benefits from concurrent execution.
+							Reverses text with simulated delay. Benefits from concurrent
+							execution.
 						</span>
 					</div>
 
@@ -449,15 +465,14 @@ function App() {
 							Fetch Data
 						</button>
 						<span className="mt-1 text-xs text-organic-500">
-							Perfect for testing concurrent execution with high maxConcurrent values.
+							Perfect for testing concurrent execution with high maxConcurrent
+							values.
 						</span>
 					</div>
 
 					{/* Process Data Section - I/O Bound */}
 					<div className="relative flex flex-col gap-4 p-6 transition-shadow border-l-8 shadow-xl bg-organic-50/80 border-purple-200 rounded-2xl hover:shadow-2xl group">
-						<div className="absolute text-2xl select-none -left-5 top-4">
-							⚙️
-						</div>
+						<div className="absolute text-2xl select-none -left-5 top-4">⚙️</div>
 						<h2 className="flex items-center gap-2 mb-1 text-lg font-bold text-organic-900 font-display">
 							Data Processor
 						</h2>
@@ -489,24 +504,34 @@ function App() {
 					</h2>
 					<div className="grid gap-4 md:grid-cols-2">
 						<div>
-							<h3 className="font-semibold text-blue-800 mb-2">🔴 CPU-Bound Tasks (Red)</h3>
+							<h3 className="font-semibold text-blue-800 mb-2">
+								🔴 CPU-Bound Tasks (Red)
+							</h3>
 							<p className="text-sm text-blue-700">
-								Tasks like Fibonacci calculations use CPU intensively. For these, keep 
-								<strong> Max Concurrent Tasks = 1</strong> to avoid competing for CPU resources.
+								Tasks like Fibonacci calculations use CPU intensively. For
+								these, keep
+								<strong> Max Concurrent Tasks = 1</strong> to avoid competing
+								for CPU resources.
 							</p>
 						</div>
 						<div>
-							<h3 className="font-semibold text-blue-800 mb-2">🔵 I/O-Bound Tasks (Blue/Green/Purple)</h3>
+							<h3 className="font-semibold text-blue-800 mb-2">
+								🔵 I/O-Bound Tasks (Blue/Green/Purple)
+							</h3>
 							<p className="text-sm text-blue-700">
-								Tasks with delays (network requests, file operations) benefit from 
-								<strong> Max Concurrent Tasks &gt; 1</strong>. Try setting it to 3-5 and see the performance improvement!
+								Tasks with delays (network requests, file operations) benefit
+								from
+								<strong> Max Concurrent Tasks &gt; 1</strong>. Try setting it to
+								3-5 and see the performance improvement!
 							</p>
 						</div>
 					</div>
 					<div className="mt-4 p-3 bg-yellow-100 border border-yellow-300 rounded-lg">
 						<p className="text-sm text-yellow-800">
-							<strong>💡 Tip:</strong> Watch the "Running Tasks" and "Can Accept More" stats while tasks execute. 
-							With concurrent execution enabled, you'll see multiple tasks running simultaneously on each worker!
+							<strong>💡 Tip:</strong> Watch the "Running Tasks" and "Can Accept
+							More" stats while tasks execute. With concurrent execution
+							enabled, you'll see multiple tasks running simultaneously on each
+							worker!
 						</p>
 					</div>
 				</div>

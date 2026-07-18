@@ -24,7 +24,8 @@
 	"scripts": {
 		"build": "bunup",
 		"test": "bun test",
-		"lint": "biome check ."
+		"lint": "biome check .",
+		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
 		"comlink-worker-pool": "workspace:*"

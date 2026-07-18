@@ -13,8 +13,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
       - run: bun install --frozen-lockfile
+      - run: bun run playground:lint
+      - run: bun run playground:typecheck
       - run: bun run -F comlink-worker-pool build
-      - run: bun run -F comlink-worker-pool-playground build
+      - run: bun run playground:build
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:

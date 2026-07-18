@@ -23,7 +23,8 @@
 	"scripts": {
 		"build": "bunup",
 		"test": "bun test",
-		"lint": "biome check ."
+		"lint": "biome check .",
+		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
 		"comlink": "^4.4.2"

@@ -7,13 +7,16 @@
   },
   "scripts": {
     "playground:lint": "bun run -F comlink-worker-pool-playground lint",
+    "playground:typecheck": "bun run -F comlink-worker-pool-playground typecheck",
     "playground:build": "bun run -F comlink-worker-pool-playground build",
     "playground:dev": "bun run -F comlink-worker-pool-playground dev",
-    "lint": "bun run -F comlink-worker-pool-react -F comlink-worker-pool lint",
+    "lint": "bun run -F comlink-worker-pool-react -F comlink-worker-pool -F comlink-worker-pool-playground lint",
+    "typecheck": "bun run -F comlink-worker-pool-react -F comlink-worker-pool -F comlink-worker-pool-playground typecheck",
     "build": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
     "build:watch": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
     "test": "bun run -F comlink-worker-pool-react -F comlink-worker-pool test",
     "test:exports": "node scripts/smoke-package-exports.cjs",
+    "verify": "bun run lint && bun run typecheck && bun run test && bun run build && bun run playground:build && bun run test:exports",
     "changeset": "changeset",
     "version": "changeset version && bun install",
     "release": "bun run build && bun run test && changeset publish"
