@@ -69,6 +69,8 @@ jobs:
         run: bun run --filter comlink-worker-pool build
       - name: Build comlink-worker-pool-react
         run: bun run --filter comlink-worker-pool-react build
+      - name: Check scheduler and bundle budgets
+        run: bun run benchmark:runtime && bun run benchmark:bundle
       - name: Build playground
         run: bun run playground:build
       - name: Validate packed packages and consumer imports

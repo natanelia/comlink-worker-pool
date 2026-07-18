@@ -1,317 +1,116 @@
-# 🚀 comlink-worker-pool
+# comlink-worker-pool
 
 [![npm version](https://img.shields.io/npm/v/comlink-worker-pool?color=blue)](https://www.npmjs.com/package/comlink-worker-pool)
-[![bun compatible](https://img.shields.io/badge/bun-%E2%9C%94%EF%B8%8F-green)](https://bun.sh/)
-[![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 
-> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-worker-pool/)!**
+A typed Comlink worker pool with bounded scheduling, observable lifecycle state, and graceful shutdown.
 
-**Effortless parallelism for your React and JS/TS apps.**
-
-A blazing-fast, ergonomic Web Worker pool library powered by [Comlink](https://github.com/GoogleChromeLabs/comlink). Developed with Bun for fast builds and tests, but works in any modern JS/TS/React app. Offload CPU-intensive work to a pool of workers, maximize throughput, and keep your UI smooth.
-
----
-
-## ✨ Why comlink-worker-pool?
-
-- **Supercharge performance:** Run heavy computations in parallel without blocking the main thread.
-- **Zero-hassle API:** Simple, type-safe, and ergonomic. No boilerplate.
-- **Easy to develop & test:** Built with Bun for development and CI, but no Bun dependency at runtime.
-- **Crash resilience:** Automatic worker recovery and error propagation.
-- **Live stats:** Monitor pool health and performance in real time.
-- **Resource efficient:** Idle worker auto-termination saves memory and CPU.
-
----
-
-## 🚦 Features
-
-- 🧩 Simple API for parallelizing tasks
-- 🔗 Built on Comlink for ergonomic worker communication
-- 🦾 TypeScript support
-- ⚡ Configurable pool size & worker factory
-- 📈 Live stats and onUpdateStats callback
-- 💥 Full error propagation for seamless debugging
-- 💤 Idle worker auto-termination
-- 🔄 Automatic worker recovery
-- 🔒 Type-safe and ergonomic integration
-- ⏱️ **Worker lifecycle management** - Terminate workers based on task count or lifetime duration
-- 🚀 **Concurrent task execution** - Run multiple tasks concurrently on the same worker for I/O-bound operations
-
----
-
-## ⚡ Quick Start
-
-Install from your monorepo root:
+## Install
 
 ```bash
-bun add comlink-worker-pool
+npm install comlink-worker-pool comlink
 ```
 
-Or with npm:
+The package publishes ESM and CommonJS with declarations and linked source maps. Bun is used by this repository, but it is not a runtime dependency.
 
-```bash
-npm install comlink-worker-pool
-```
+## Quick start
 
-## Usage
-
-Import and use the worker pool in your app:
+Expose an API from a module worker:
 
 ```ts
-import { WorkerPool } from "comlink-worker-pool";
-import * as Comlink from "comlink"; // or your Comlink import
+// worker.ts
+import { expose } from "comlink";
 
-// Define your worker API interface
-type WorkerApi = {
-  fibAsync(n: number): Promise<number>;
+function fibonacci(n: number): number {
+  return n <= 1 ? n : fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+const api = {
+  fib: async (n: number) => fibonacci(n),
 };
 
-// Create the worker pool
+export type WorkerApi = typeof api;
+expose(api);
+```
+
+Create the pool in the owning application:
+
+```ts
+import { wrap } from "comlink";
+import { WorkerPool } from "comlink-worker-pool";
+import type { WorkerApi } from "./worker";
+
 const pool = new WorkerPool<WorkerApi>({
   size: 2,
   workerFactory: () =>
     new Worker(new URL("./worker.ts", import.meta.url), { type: "module" }),
-  proxyFactory: (worker) => Comlink.wrap<WorkerApi>(worker),
-  onUpdateStats: (stats) => console.log("Pool stats:", stats),
-  onEvent: (event) => console.log("Pool event:", event),
-  workerIdleTimeoutMs: 30000, // Optional: terminate idle workers after 30s
-  maxTasksPerWorker: 100, // Optional: terminate workers after 100 tasks
-  maxWorkerLifetimeMs: 5 * 60 * 1000, // Optional: terminate workers after 5 minutes
-  taskTimeoutMs: 60_000, // Customize the 5-minute silent-exit/hang deadline
-  terminationFailureWorkerBuffer: 2, // Optional replacement budget for failed termination
+  proxyFactory: (worker) => wrap<WorkerApi>(worker),
+  maxQueueSize: 64,
+  taskTimeoutMs: 60_000,
 });
 
-// Use the API proxy for ergonomic calls
 const api = pool.getApi();
-const result = await api.fibAsync(10);
-console.log(result); // Output: 55
-
-// Get live pool stats
-console.log(pool.getStats());
+const values = await Promise.all([api.fib(38), api.fib(39), api.fib(40)]);
+const shutdown = await pool.drain();
+console.log(values, shutdown.confirmed);
 ```
 
-## WorkerPool Options
+Calls through `getApi()` are scheduled lazily. Workers are created as demand arrives, up to `size`.
 
-| Option                        | Type                               | Description                                      |
-| ----------------------------- | ---------------------------------- | ------------------------------------------------ |
-| `size`                        | `number`                           | Maximum scheduler-managed, non-quarantined workers |
-| `workerFactory`               | `() => Worker`                     | Factory function to create new workers           |
-| `proxyFactory`                | `(worker: Worker) => P`            | Factory to wrap a worker with Comlink or similar |
-| `onUpdateStats`               | `(stats: WorkerPoolStats) => void` | Callback on pool stats update (optional)         |
-| `onEvent`                     | `(event: WorkerPoolEvent) => void` | Structured, argument-free task and worker events |
-| `workerIdleTimeoutMs`         | `number`                           | Idle timeout for terminating workers (optional)  |
-| `maxTasksPerWorker`           | `number`                           | Max tasks per worker before termination (optional) |
-| `maxWorkerLifetimeMs`         | `number`                           | Max worker lifetime in milliseconds (optional)   |
-| `maxConcurrentTasksPerWorker` | `number`                           | Max concurrent tasks per worker (optional, defaults to 1) |
-| `maxQueueSize`                | `number`                           | Maximum waiting tasks; defaults to unlimited |
-| `queueOverflowPolicy`         | `"reject" \| "drop-oldest"`     | Full-queue behavior; defaults to `"reject"` |
-| `queueTimeoutMs`              | `number \| false`                  | Default queue-wait deadline; disabled by default |
-| `taskTimeoutMs`               | `number \| false`                   | Task deadline; defaults to 5 minutes, false disables it |
-| `proxyCleanup`                | `(proxy: P) => void`               | Custom proxy cleanup before worker termination (optional) |
-| `terminationFailureWorkerBuffer` | `number`                       | Extra worker slots that preserve capacity after termination failure; defaults to `max(2, floor(size / 2))` |
-| `terminationRetryAttempts`    | `number`                           | Additional termination attempts after the first; defaults to 3 |
-| `terminationRetryDelayMs`     | `number`                           | Initial exponential-backoff delay; defaults to 100ms |
-| `terminationAttemptTimeoutMs` | `number`                           | Deadline for each async termination attempt; defaults to 5 seconds |
-| `workerTerminator`            | `(worker: Worker) => void \| PromiseLike<unknown>` | Optional host-specific termination implementation |
-| `onWorkerTerminationError`    | `(error: WorkerTerminationError) => void` | Isolated callback for failed or timed-out termination attempts |
+## Scheduling and backpressure
 
-### Advanced Usage
+Each worker runs one task at a time by default. Increase `maxConcurrentTasksPerWorker` for APIs that spend most of their time awaiting asynchronous work. CPU-bound tasks normally benefit from one task per worker.
 
-- Most callers only need `WorkerPool<WorkerApi>`. Advanced callers can use
-  `WorkerPool<TProxy, TTask, TResult>`.
-
-### Controlled Scheduling and Backpressure
-
-`getApi()` remains the simplest way to submit work. Use `run()` when a call
-needs cancellation, priority, or a queue-specific deadline:
+`getApi()` is the simplest submission interface. Use `run()` when one call needs priority, cancellation, or a queue-specific deadline:
 
 ```ts
 const controller = new AbortController();
-const result = pool.run("fibAsync", [42], {
-  signal: controller.signal,
+
+const result = pool.run("fib", [42], {
   priority: 10,
   queueTimeoutMs: 2_000,
+  signal: controller.signal,
 });
 ```
 
-Higher priorities run first and equal priorities remain FIFO. `maxQueueSize`
-counts only waiting work. A full queue rejects new work with
-`WorkerPoolQueueFullError`, or evicts its oldest waiting task when
-`queueOverflowPolicy` is `"drop-oldest"`.
+Higher numeric priorities run first. Equal priorities remain FIFO. `maxQueueSize` counts only waiting work, not running work. The default overflow policy rejects the new call with `WorkerPoolQueueFullError`; `"drop-oldest"` instead rejects the oldest queued call.
 
-Aborting queued work removes it immediately. Aborting active work rejects the
-caller immediately but does not forcibly interrupt worker code, because doing
-so could also destroy unrelated concurrent calls on that worker. The worker
-slot remains occupied until the underlying call finishes or `taskTimeoutMs`
-recycles the worker.
+Aborting queued work removes it immediately. Aborting active work rejects the caller's promise but does not forcibly interrupt worker code because that worker may host other concurrent calls. Its slot remains occupied until the underlying call finishes or the task timeout recycles the worker.
 
-### Graceful and Awaitable Shutdown
+## Shutdown
 
-Use `drain()` to stop accepting new calls while allowing already accepted work
-to finish. The pool terminates its workers after the queue and active calls are
-empty. Use `close()` when active and queued calls should be rejected
-immediately.
+Choose the shutdown behavior that matches the owner lifecycle:
 
 ```ts
-const report = await pool.drain();
-if (!report.confirmed) {
-  console.error(`${report.unconfirmedWorkers} workers may still be alive`);
-}
+const drainReport = await pool.drain(); // finish accepted work
+const closeReport = await pool.close(); // reject accepted work immediately
 ```
 
-Both methods return the same report available from `pool.terminated`. It
-resolves after every worker termination is either confirmed or has exhausted
-the configured retries. `confirmed: false` therefore reports a bounded cleanup
-failure instead of leaving shutdown awaiting forever.
+Both methods reject future calls, terminate workers, and return a `WorkerPoolShutdownReport`. The shared `pool.terminated` promise exposes the same final report.
 
-### Worker Lifecycle Management
+`terminateAll()` is the synchronous compatibility entry point. It begins immediate close and cleanup but does not await the final report.
 
-The WorkerPool supports automatic worker termination based on different criteria to prevent memory leaks and ensure optimal performance:
+Worker termination is retried with bounded exponential backoff. A termination that cannot be confirmed is quarantined and remains visible in statistics. Replacement workers are limited by `terminationFailureWorkerBuffer`, preventing an unbounded number of potentially live workers.
 
-#### Task-Based Termination (`maxTasksPerWorker`)
-```ts
-const pool = new WorkerPool<WorkerApi>({
-  // ... other options
-  maxTasksPerWorker: 100, // Terminate workers after 100 tasks
-});
-```
-- Prevents memory leaks from long-running workers
-- Ensures fresh worker state periodically
-- Useful for workers that accumulate state over time
+## Observability
 
-#### Time-Based Termination (`maxWorkerLifetimeMs`)
-```ts
-const pool = new WorkerPool<WorkerApi>({
-  // ... other options
-  maxWorkerLifetimeMs: 5 * 60 * 1000, // Terminate workers after 5 minutes
-});
-```
-- Limits worker lifetime to prevent resource accumulation
-- Useful for workers that may develop memory leaks over time
-- Ensures periodic refresh of worker processes
+Read a snapshot with `getStats()` or subscribe with `onUpdateStats`. Statistics include:
 
-#### Idle Termination (`workerIdleTimeoutMs`)
-```ts
-const pool = new WorkerPool<WorkerApi>({
-  // ... other options
-  workerIdleTimeoutMs: 30 * 1000, // Terminate idle workers after 30 seconds
-});
-```
-- Reduces resource usage when demand is low
-- Workers are recreated on-demand when needed
-- Helps with memory management in variable-load scenarios
+- pool state, configured capacity, instantiated workers, and active tasks
+- queue depth, capacity, remaining slots, and oldest queued task age
+- healthy and quarantined worker counts
+- submitted, started, completed, failed, cancelled, timed out, and dropped task counters
+- termination failure counters
 
-All lifecycle management options can be combined for comprehensive worker management.
-
-### Unconfirmed Termination Containment
-
-The browser provides no stronger portable primitive if `worker.terminate()`
-itself throws. The pool therefore quarantines that worker and continues counting
-it as potentially alive. It admits replacements using two independent bounds:
-
-```text
-managed workers <= size
-managed + quarantined workers <= size + terminationFailureWorkerBuffer
-```
-
-`terminationFailureWorkerBuffer` defaults to
-`max(2, floor(size / 2))`. Full healthy capacity is preserved while the
-quarantine count fits within that buffer. After the physical limit is
-reached, capacity degrades instead of creating unbounded possible zombie
-workers. If no healthy worker or retry path remains, queued and future work
-rejects with `WorkerPoolCapacityError`.
-
-Termination is attempted once plus three retries by default, using exponential
-backoff from 100ms. A promise returned by `workerTerminator` must confirm
-termination within five seconds per attempt. These values can be changed with
-`terminationRetryAttempts`, `terminationRetryDelayMs`, and
-`terminationAttemptTimeoutMs`. `terminateAll()` closes the scheduler
-immediately and continues this bounded retry policy; quarantined workers remain
-visible in statistics until termination is confirmed.
-
-Use `workerTerminator` for a host-specific supervisor:
+`onEvent` receives structured task and worker events. Task arguments and results are intentionally excluded.
 
 ```ts
 const pool = new WorkerPool<WorkerApi>({
   size: 4,
-  terminationFailureWorkerBuffer: 2,
   workerFactory,
   proxyFactory,
-  workerTerminator: async (worker) => {
-    await supervisor.terminate(worker); // Resolve only after confirmed shutdown
-  },
-  onWorkerTerminationError: (error) => {
-    console.error(error.attempt, error.exhausted, error.cause);
-  },
-});
-```
-
-### Concurrent Task Execution
-
-By default, each worker processes tasks sequentially (one at a time). However, you can configure workers to handle multiple tasks concurrently, which is especially beneficial for I/O-bound operations or tasks that involve waiting.
-
-#### Basic Concurrent Execution
-
-```ts
-const pool = new WorkerPool<WorkerApi>({
-  size: 2,
-  maxConcurrentTasksPerWorker: 3, // Allow up to 3 concurrent tasks per worker
-  workerFactory: () => new Worker(new URL("./worker.ts", import.meta.url)),
-  proxyFactory: (worker) => Comlink.wrap<WorkerApi>(worker),
-});
-
-// These 6 tasks will run on 2 workers, with up to 3 tasks per worker concurrently
-const results = await Promise.all([
-  api.fetchData("url1"),  // Worker 1, Task 1
-  api.fetchData("url2"),  // Worker 1, Task 2  
-  api.fetchData("url3"),  // Worker 1, Task 3
-  api.fetchData("url4"),  // Worker 2, Task 1
-  api.fetchData("url5"),  // Worker 2, Task 2
-  api.fetchData("url6"),  // Worker 2, Task 3
-]);
-```
-
-#### When to Use Concurrent Execution
-
-**✅ Good for:**
-- I/O-bound operations (network requests, file operations)
-- Tasks with async waiting periods
-- Database queries
-- API calls
-
-**❌ Avoid for:**
-- CPU-intensive computations (use more workers instead)
-- Tasks that compete for the same resources
-- Memory-intensive operations
-
-#### Performance Considerations
-
-```ts
-// For I/O-bound tasks: Higher concurrency can improve throughput
-const ioPool = new WorkerPool<ApiWorker>({
-  size: 2,
-  maxConcurrentTasksPerWorker: 10, // High concurrency for I/O
-  // ...
-});
-
-// For CPU-bound tasks: Use more workers instead of concurrency
-const cpuPool = new WorkerPool<ComputeWorker>({
-  size: navigator.hardwareConcurrency || 4, // More workers
-  maxConcurrentTasksPerWorker: 1, // Sequential processing (default)
-  // ...
-});
-```
-
-#### Scheduling observability
-
-`getStats()` and `onUpdateStats` expose live capacity, queue age, lifecycle
-state, and cumulative task outcomes. `onEvent` provides per-task queue wait and
-execution duration without exposing task arguments:
-
-```ts
-const pool = new WorkerPool<WorkerApi>({
-  // ...factories and size
+  onUpdateStats: (stats) => console.log(stats.queue, stats.runningTasks),
   onEvent: (event) => {
     if (event.type === "task-settled") {
       console.log(event.taskId, event.outcome, event.durationMs);
@@ -320,107 +119,53 @@ const pool = new WorkerPool<WorkerApi>({
 });
 ```
 
-## Example Worker
+Observer exceptions are isolated from scheduler behavior.
 
-```ts
-// worker.ts
-export function fibAsync(n: number): number {
-  return n <= 1 ? n : fibAsync(n - 1) + fibAsync(n - 2);
-}
-```
+## Configuration
 
-## API Reference
+| Option | Type | Behavior |
+| --- | --- | --- |
+| `size` | `number` | Maximum scheduler-managed workers |
+| `workerFactory` | `() => Worker` | Creates a fresh worker |
+| `proxyFactory` | `(worker: Worker) => P` | Creates the worker API proxy |
+| `maxConcurrentTasksPerWorker` | `number` | Per-worker concurrency, default `1` |
+| `maxQueueSize` | `number` | Maximum waiting tasks, default unlimited |
+| `queueOverflowPolicy` | `"reject" \| "drop-oldest"` | Full-queue behavior, default `"reject"` |
+| `queueTimeoutMs` | `number \| false` | Default maximum queue wait, disabled by default |
+| `taskTimeoutMs` | `number \| false` | Running task deadline, default five minutes |
+| `workerIdleTimeoutMs` | `number` | Retires an idle worker after the duration |
+| `maxTasksPerWorker` | `number` | Retires a worker after assigned task count |
+| `maxWorkerLifetimeMs` | `number` | Retires a worker after the lifetime once idle |
+| `proxyCleanup` | `(proxy: P) => void` | Custom proxy cleanup before worker termination |
+| `onUpdateStats` | `(stats) => void` | Receives live statistics |
+| `onEvent` | `(event) => void` | Receives structured scheduler events |
+| `terminationFailureWorkerBuffer` | `number` | Extra physical-worker allowance for quarantined workers |
+| `terminationRetryAttempts` | `number` | Retries after the initial termination attempt, default `3` |
+| `terminationRetryDelayMs` | `number` | Initial retry delay, default `100` ms |
+| `terminationAttemptTimeoutMs` | `number` | Async attempt deadline, default five seconds |
+| `workerTerminator` | `(worker) => void \| PromiseLike<unknown>` | Host-specific termination implementation |
+| `onWorkerTerminationError` | `(error) => void` | Receives isolated termination failures |
 
-- `getApi(): P` — Returns a proxy for calling worker methods as if local (recommended).
-- `run(method, args, options)` — Submits a typed call with priority,
-  `AbortSignal`, and queue-deadline controls.
-- `getStats(): WorkerPoolStats` — Returns live stats about the pool.
-- `drain(): Promise<WorkerPoolShutdownReport>` — Rejects new work, finishes
-  accepted work, and awaits worker cleanup.
-- `close(): Promise<WorkerPoolShutdownReport>` — Rejects all work immediately
-  and awaits worker cleanup.
-- `terminated: Promise<WorkerPoolShutdownReport>` — Shared final shutdown
-  outcome for either close path.
-- `terminateAll(): void` — Permanently closes the pool, rejects queued and
-  active work, releases standard Comlink proxies, and starts bounded
-  termination for every healthy worker.
+The default five-minute task timeout is the portable recovery mechanism for a worker that silently closes or never settles. Set it to `false` only for intentionally unbounded work. Timed-out calls are not retried because they may already have produced side effects.
 
-Standard browser Workers do not emit a portable `close` event when worker code
-calls `self.close()`, so tasks have a five-minute default deadline. Customize
-`taskTimeoutMs` for the workload, or set it to `false` only for intentionally
-unbounded jobs. A timeout rejects all tasks on that worker and replaces it for
-queued work; tasks are never automatically retried because they may have already
-produced side effects.
+## API
 
-### WorkerPoolStats Interface
+- `getApi()` returns a typed proxy whose methods submit scheduled work.
+- `run(method, args, options)` submits a typed call with scheduling controls.
+- `getStats()` returns a current `WorkerPoolStats` snapshot.
+- `drain()` rejects new work, finishes accepted work, and awaits cleanup.
+- `close()` rejects work immediately and awaits cleanup.
+- `terminated` is the shared final shutdown promise.
+- `terminateAll()` begins immediate shutdown without awaiting its report.
 
-```ts
-interface WorkerPoolStats {
-  state: "running" | "draining" | "closed";
-  size: number;                    // Maximum scheduler-managed workers
-  maxConcurrentTasks: number;      // Configured task concurrency ceiling
-  available: number;               // Workers available to take new tasks
-  queue: number;                   // Tasks waiting in the queue
-  queueCapacity: number | null;    // Bounded queue limit, or null
-  queueCapacityRemaining: number | null;
-  oldestQueuedTaskAgeMs: number | null;
-  workers: number;                 // Healthy plus quarantined physical workers
-  healthyWorkers: number;          // Managed workers, including busy workers retiring afterward
-  quarantinedWorkers: number;      // Workers with unconfirmed termination
-  terminationFailureWorkerBuffer: number; // Configured failed-termination buffer
-  terminationFailures: number;     // Cumulative failed/timed-out attempts
-  idleWorkers: number;             // Workers with no running tasks
-  runningTasks: number;            // Total tasks currently executing
-  availableForConcurrency: number; // Workers that can accept additional concurrent tasks
-  submittedTasks: number;          // Cumulative valid calls received
-  startedTasks: number;            // Cumulative worker assignments
-  completedTasks: number;          // Cumulative successful calls
-  failedTasks: number;             // Other caller-visible failures
-  cancelledTasks: number;          // AbortSignal cancellations
-  timedOutTasks: number;           // Queue and task timeouts
-  droppedTasks: number;            // drop-oldest evictions
-}
-```
+Exported error classes let callers distinguish capacity, queue overflow, cancellation, queue timeout, task timeout, worker failure, and closed-pool outcomes.
 
-**Key differences with concurrent execution:**
-- `idleWorkers`: Workers with zero running tasks
-- `runningTasks`: Total count of all executing tasks across all workers
-- `availableForConcurrency`: Workers that haven't reached their `maxConcurrentTasksPerWorker` limit
-- `workers` can exceed `size` only by the configured termination-failure buffer;
-  quarantined workers never receive tasks.
+## React and complete example
 
-## Development
+Use [comlink-worker-pool-react](../comlink-worker-pool-react/README.md) when a React component should own the pool lifecycle or task state.
 
-- **Build the library:**
-  ```bash
-  bun run --filter comlink-worker-pool build
-  ```
-- **Run tests:**
-  ```bash
-  bun run --filter comlink-worker-pool test
-  ```
-
-## Playground Demo
-
-Try the live playground demo here: [https://natanelia.github.io/comlink-worker-pool/](https://natanelia.github.io/comlink-worker-pool/)
-
-If you want to run it locally, see the [playground README](../playground/README.md).
-
-## Troubleshooting
-
-- Worker file paths must be valid URLs relative to the importing module.
-- If you encounter module resolution issues in the playground, try rebuilding the worker pool package.
-
-## Contributing
-
-Issues and PRs are welcome! Please open an issue or submit a pull request on the [GitHub repository](https://github.com/natanelia/comlink-worker-pool).
+The browser [playground application](../playground/src/App.tsx) and [worker](../playground/src/worker.ts) form a complete runnable example with queue telemetry and lifecycle events.
 
 ## License
 
-MIT
-
----
-
-See the [global README](../../README.md) for overall monorepo setup and structure.
-
-See the [global README](../../README.md) for monorepo setup and structure.
+[MIT](../../LICENSE)

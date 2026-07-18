@@ -1,584 +1,544 @@
 import * as Comlink from "comlink";
-import { WorkerPool, type WorkerPoolStats } from "comlink-worker-pool";
-import { useCallback, useEffect, useRef, useState } from "react";
-import "./index.css";
+import type { WorkerPoolEvent, WorkerPoolStats } from "comlink-worker-pool";
+import { useWorkerPool, useWorkerTask } from "comlink-worker-pool-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { WorkerApi } from "./worker";
+
+const DEFAULT_POOL_SIZE = Math.max(
+	1,
+	Math.min(4, (navigator.hardwareConcurrency || 2) - 1),
+);
+const MAX_LOG_ENTRIES = 80;
+
+interface PoolConfig {
+	concurrency: number;
+	revision: number;
+	size: number;
+}
+
+interface LogEntry {
+	detail: string;
+	id: number;
+	kind: "error" | "lifecycle" | "task";
+}
+
+interface BatchState {
+	completed: number;
+	failed: number;
+	status: "idle" | "running" | "completed" | "error";
+}
 
 const workerFactory = () =>
 	new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
-
-type WorkerApi = {
-	fibAsync: (n: number) => Promise<number>;
-	countWords: (text: string) => Promise<number>;
-	reverseString: (text: string) => Promise<string>;
-	fetchData: (url: string, delay?: number) => Promise<string>;
-	processData: (data: string, delay?: number) => Promise<string>;
-};
-
 const proxyFactory = (worker: Worker) => Comlink.wrap<WorkerApi>(worker);
 
+function toErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function updateFiniteNumber(
+	event: React.ChangeEvent<HTMLInputElement>,
+	update: (value: number) => void,
+): void {
+	if (Number.isFinite(event.currentTarget.valueAsNumber)) {
+		update(event.currentTarget.valueAsNumber);
+	}
+}
+
+function describeEvent(event: WorkerPoolEvent): string {
+	switch (event.type) {
+		case "task-queued":
+			return `#${event.taskId} ${event.method} queued at priority ${event.priority}`;
+		case "task-started":
+			return `#${event.taskId} started on worker ${event.workerId} after ${Math.round(event.queueWaitMs)} ms`;
+		case "task-settled":
+			return `#${event.taskId} ${event.outcome} in ${Math.round(event.durationMs)} ms`;
+		case "worker-created":
+			return `worker ${event.workerId} created`;
+		case "worker-removed":
+			return `worker ${event.workerId} removed: ${event.reason}`;
+		case "worker-termination-failed":
+			return `worker termination attempt ${event.attempt} failed${event.exhausted ? ": retries exhausted" : ""}`;
+	}
+}
+
 function App() {
-	const [pool, setPool] = useState<WorkerPool<WorkerApi> | null>(null);
-	const [inputNumber, setInputNumber] = useState(40);
-	const [taskCount, setTaskCount] = useState(10);
-	const [inputText, setInputText] = useState("");
-	const [reverseText, setReverseText] = useState("");
-	const [logs, setLogs] = useState<{ key: string; text: string }[]>([]);
-	const logsListRef = useRef<HTMLUListElement>(null);
-
-	// New state for concurrent execution configuration
-	const [poolSize, setPoolSize] = useState(navigator.hardwareConcurrency || 4);
-	const [maxConcurrentTasks, setMaxConcurrentTasks] = useState(1);
-	const [isRecreatingPool, setIsRecreatingPool] = useState(false);
-
-	// Function to create/recreate the pool with current settings
-	const createPool = useCallback(() => {
-		return new WorkerPool<WorkerApi>({
-			size: poolSize,
-			maxConcurrentTasksPerWorker: maxConcurrentTasks,
-			workerFactory,
-			proxyFactory,
-			onUpdateStats: setStats,
-			workerIdleTimeoutMs: 1000,
-		});
-	}, [poolSize, maxConcurrentTasks]);
-
-	useEffect(() => {
-		const p = createPool();
-		setPool(p);
-		setStats(p.getStats());
-		return () => {
-			p.terminateAll();
-		};
-	}, [createPool]);
-
-	// Function to recreate pool when configuration changes
-	const recreatePool = async () => {
-		if (!pool) return;
-
-		setIsRecreatingPool(true);
-		pool.terminateAll();
-
-		// Small delay to ensure cleanup
-		await new Promise((resolve) => setTimeout(resolve, 100));
-
-		const newPool = createPool();
-		setPool(newPool);
-		setStats(newPool.getStats());
-		setIsRecreatingPool(false);
-
-		setLogs((prev) => [
-			...prev,
-			{
-				key: Date.now().toString(),
-				text: `🔄 Pool recreated: ${poolSize} workers, ${maxConcurrentTasks} max concurrent tasks per worker`,
-			},
-		]);
-	};
-
-	const [stats, setStats] = useState<WorkerPoolStats>({
-		state: "running",
-		size: 0,
-		maxConcurrentTasks: 0,
-		available: 0,
-		queue: 0,
-		queueCapacity: null,
-		queueCapacityRemaining: null,
-		oldestQueuedTaskAgeMs: null,
-		workers: 0,
-		healthyWorkers: 0,
-		quarantinedWorkers: 0,
-		terminationFailureWorkerBuffer: 0,
-		terminationFailures: 0,
-		idleWorkers: 0,
-		runningTasks: 0,
-		availableForConcurrency: 0,
-		submittedTasks: 0,
-		startedTasks: 0,
-		completedTasks: 0,
-		failedTasks: 0,
-		cancelledTasks: 0,
-		timedOutTasks: 0,
-		droppedTasks: 0,
+	const [config, setConfig] = useState<PoolConfig>({
+		concurrency: 1,
+		revision: 0,
+		size: DEFAULT_POOL_SIZE,
 	});
+	const [draftConcurrency, setDraftConcurrency] = useState(1);
+	const [draftSize, setDraftSize] = useState(DEFAULT_POOL_SIZE);
+	const [stats, setStats] = useState<WorkerPoolStats | null>(null);
+	const [logs, setLogs] = useState<LogEntry[]>([]);
+	const [fibInput, setFibInput] = useState(36);
+	const [textInput, setTextInput] = useState(
+		"Worker pools keep expensive work away from the main thread.",
+	);
+	const [batchCount, setBatchCount] = useState(12);
+	const [batchDelay, setBatchDelay] = useState(300);
+	const [batch, setBatch] = useState<BatchState>({
+		completed: 0,
+		failed: 0,
+		status: "idle",
+	});
+	const logSequence = useRef(0);
+	const logListRef = useRef<HTMLOListElement>(null);
 
-	// Utility to format log messages
-	const formatLog = (label: string, result: unknown) =>
-		`${label}: ${typeof result === "object" ? JSON.stringify(result) : result}`;
+	const appendLog = useCallback((kind: LogEntry["kind"], detail: string) => {
+		const entry = { detail, id: ++logSequence.current, kind };
+		setLogs((current) => [...current.slice(-(MAX_LOG_ENTRIES - 1)), entry]);
+	}, []);
 
-	/**
-	 * Helper to run N tasks in parallel and log each result
-	 * @param taskFn - async function returning the result
-	 * @param label - label to display in the log
-	 */
-	const runAndLogTasks = async (
-		taskFn: () => Promise<unknown>,
-		label: string,
-	) => {
-		const tasks: Promise<void>[] = [];
-		for (let i = 0; i < taskCount; i++) {
-			tasks.push(
-				(async () => {
-					const result = await taskFn();
-					setLogs((prev) => [
-						...prev,
-						{
-							key: Date.now() + Math.random().toString(),
-							text: formatLog(label, result),
-						},
-					]);
-				})(),
+	const handleEvent = useCallback(
+		(event: WorkerPoolEvent) => {
+			appendLog(
+				event.type.startsWith("worker-") ? "lifecycle" : "task",
+				describeEvent(event),
 			);
-		}
-		await Promise.all(tasks);
-	};
+		},
+		[appendLog],
+	);
 
-	const runTasks = async () => {
-		if (!pool) return;
-		const api = pool.getApi();
-		await runAndLogTasks(
-			() => api.fibAsync(inputNumber),
-			`Fib(${inputNumber})`,
-		);
-	};
+	const pool = useWorkerPool<WorkerApi>({
+		maxConcurrentTasksPerWorker: config.concurrency,
+		maxQueueSize: 48,
+		onEvent: handleEvent,
+		onUpdateStats: setStats,
+		poolSize: config.size,
+		proxyFactory,
+		queueTimeoutMs: 5_000,
+		reconfigureKey: config.revision,
+		taskTimeoutMs: 30_000,
+		workerFactory,
+		workerIdleTimeoutMs: 30_000,
+	});
+	const fibTask = useWorkerTask(pool.api, "fibAsync");
+	const textTask = useWorkerTask(pool.api, "analyzeText");
 
-	const runCountWords = async () => {
-		if (!pool) return;
-		const api = pool.getApi();
-		await runAndLogTasks(
-			() => api.countWords(inputText),
-			`CountWords("${inputText}")`,
-		);
-	};
+	const isBusy =
+		fibTask.status === "running" ||
+		textTask.status === "running" ||
+		batch.status === "running";
+	const poolReady = pool.poolStatus === "ready";
+	const capacity =
+		stats?.maxConcurrentTasks ?? config.size * config.concurrency;
+	const utilization = capacity
+		? Math.min(100, Math.round(((stats?.runningTasks ?? 0) / capacity) * 100))
+		: 0;
+	const visibleError = pool.error ?? fibTask.error ?? textTask.error;
+	const latestLogId = logs.at(-1)?.id;
 
-	const runReverseString = async () => {
-		if (!pool) return;
-		const api = pool.getApi();
-		await runAndLogTasks(
-			() => api.reverseString(reverseText),
-			`ReverseString("${reverseText}")`,
-		);
-	};
+	const statusLabel = useMemo(() => {
+		if (pool.poolStatus === "ready" && isBusy) return "working";
+		return pool.poolStatus;
+	}, [isBusy, pool.poolStatus]);
 
-	// New I/O-bound task functions to demonstrate concurrent execution
-	const runFetchData = async () => {
-		if (!pool) return;
-		const api = pool.getApi();
-		const urls = [
-			"https://api.example.com/data1",
-			"https://api.example.com/data2",
-			"https://api.example.com/data3",
-			"https://jsonplaceholder.typicode.com/posts/1",
-			"https://jsonplaceholder.typicode.com/posts/2",
-		];
-
-		const tasks: Promise<void>[] = [];
-		for (let i = 0; i < taskCount; i++) {
-			const url = urls[i % urls.length];
-			tasks.push(
-				(async () => {
-					const result = await api.fetchData(url, 500 + Math.random() * 1000);
-					setLogs((prev) => [
-						...prev,
-						{
-							key: Date.now() + Math.random().toString(),
-							text: formatLog(`FetchData("${url}")`, result),
-						},
-					]);
-				})(),
-			);
-		}
-		await Promise.all(tasks);
-	};
-
-	const runProcessData = async () => {
-		if (!pool) return;
-		const api = pool.getApi();
-		const dataItems = [
-			"user data batch 1",
-			"analytics data batch 2",
-			"metrics data batch 3",
-			"logs data batch 4",
-			"events data batch 5",
-		];
-
-		const tasks: Promise<void>[] = [];
-		for (let i = 0; i < taskCount; i++) {
-			const data = dataItems[i % dataItems.length];
-			tasks.push(
-				(async () => {
-					const result = await api.processData(data, 300 + Math.random() * 700);
-					setLogs((prev) => [
-						...prev,
-						{
-							key: Date.now() + Math.random().toString(),
-							text: formatLog(`ProcessData("${data}")`, result),
-						},
-					]);
-				})(),
-			);
-		}
-		await Promise.all(tasks);
-	};
-
-	// Auto-scroll logs to bottom when logs change
 	useEffect(() => {
-		if (logs && logsListRef.current) {
-			logsListRef.current.scrollTop = logsListRef.current.scrollHeight;
+		if (latestLogId !== undefined && logListRef.current) {
+			logListRef.current.scrollTop = logListRef.current.scrollHeight;
 		}
-	}, [logs]);
+	}, [latestLogId]);
+
+	const applyConfig = (event: React.FormEvent<HTMLFormElement>) => {
+		event.preventDefault();
+		const size = Math.max(1, Math.min(16, Math.round(draftSize)));
+		const concurrency = Math.max(1, Math.min(8, Math.round(draftConcurrency)));
+		setDraftSize(size);
+		setDraftConcurrency(concurrency);
+		setStats(null);
+		setBatch({ completed: 0, failed: 0, status: "idle" });
+		setConfig((current) => ({
+			concurrency,
+			revision: current.revision + 1,
+			size,
+		}));
+		appendLog(
+			"lifecycle",
+			`pool configuration applied: ${size} x ${concurrency}`,
+		);
+	};
+
+	const runFibonacci = () => {
+		void fibTask.run(fibInput).catch((error) => {
+			appendLog("error", `fibonacci failed: ${toErrorMessage(error)}`);
+		});
+	};
+
+	const runTextAnalysis = () => {
+		void textTask.run(textInput).catch((error) => {
+			appendLog("error", `text analysis failed: ${toErrorMessage(error)}`);
+		});
+	};
+
+	const runBatch = async () => {
+		if (!pool.api) return;
+		const taskTotal = Math.max(1, Math.min(40, Math.round(batchCount)));
+		const delayMs = Math.max(0, Math.min(5_000, Math.round(batchDelay)));
+		setBatchCount(taskTotal);
+		setBatchDelay(delayMs);
+		setBatch({ completed: 0, failed: 0, status: "running" });
+		const calls = Array.from({ length: taskTotal }, (_, index) =>
+			pool.api?.delayedTransform(`task-${index + 1}`, delayMs),
+		).filter(
+			(
+				call,
+			): call is Promise<Awaited<ReturnType<WorkerApi["delayedTransform"]>>> =>
+				Boolean(call),
+		);
+		const settled = await Promise.allSettled(calls);
+		const completed = settled.filter(
+			(result) => result.status === "fulfilled",
+		).length;
+		const failed = settled.length - completed;
+		setBatch({
+			completed,
+			failed,
+			status: failed > 0 ? "error" : "completed",
+		});
+		appendLog(
+			failed > 0 ? "error" : "task",
+			`batch settled: ${completed} completed, ${failed} failed`,
+		);
+	};
 
 	return (
-		<div className="min-h-screen px-2 py-8 font-sans bg-gradient-to-tr from-organic-50 via-organic-100 to-organic-200">
-			<div className="max-w-6xl mx-auto">
-				<h1 className="mb-8 text-5xl font-extrabold tracking-tight text-center text-organic-400 font-display drop-shadow">
-					Comlink Worker Pool Playground
-				</h1>
+		<main className="app-shell">
+			<header className="masthead">
+				<div>
+					<p className="eyebrow">Interactive worker lab</p>
+					<h1>Comlink Worker Pool</h1>
+					<p className="lede">
+						Configure a real pool, dispatch typed React tasks, and inspect its
+						scheduler live.
+					</p>
+				</div>
+				<a
+					className="source-link"
+					href="https://github.com/natanelia/comlink-worker-pool"
+					rel="noreferrer"
+					target="_blank"
+				>
+					View source
+				</a>
+			</header>
 
-				{/* Pool Configuration Section */}
-				<div className="mb-8 p-6 bg-organic-50/90 border-2 border-organic-200 rounded-2xl shadow-lg">
-					<h2 className="mb-4 text-2xl font-bold text-organic-400 font-display">
-						⚙️ Pool Configuration
-					</h2>
-					<div className="grid gap-4 md:grid-cols-3">
-						<label className="flex flex-col gap-2">
-							<span className="text-sm font-semibold text-organic-300">
-								Pool Size (Workers)
-							</span>
+			<section className="status-strip" aria-label="Live pool summary">
+				<div className="pool-state">
+					<span
+						className={`status-dot status-${statusLabel}`}
+						aria-hidden="true"
+					/>
+					<div>
+						<span className="stat-label">Pool state</span>
+						<strong>{statusLabel}</strong>
+					</div>
+				</div>
+				<div className="summary-stat">
+					<span className="stat-label">Workers</span>
+					<strong>
+						{stats?.workers ?? 0} / {config.size}
+					</strong>
+				</div>
+				<div className="summary-stat">
+					<span className="stat-label">Running</span>
+					<strong>{stats?.runningTasks ?? 0}</strong>
+				</div>
+				<div className="summary-stat">
+					<span className="stat-label">Queued</span>
+					<strong>{stats?.queue ?? 0}</strong>
+				</div>
+				<div className="summary-stat">
+					<span className="stat-label">Settled</span>
+					<strong>
+						{(stats?.completedTasks ?? 0) + (stats?.failedTasks ?? 0)}
+					</strong>
+				</div>
+			</section>
+
+			<div className="workspace-grid">
+				<section
+					className="panel workbench"
+					aria-labelledby="workbench-heading"
+				>
+					<div className="panel-heading">
+						<div>
+							<p className="section-index">01 / Workbench</p>
+							<h2 id="workbench-heading">Dispatch workloads</h2>
+						</div>
+						<span className="binding-badge">React hooks</span>
+					</div>
+
+					<form className="configuration" onSubmit={applyConfig}>
+						<label>
+							<span>Worker limit</span>
 							<input
-								type="number"
-								value={poolSize}
-								min={1}
 								max={16}
-								onChange={(e) => setPoolSize(Number(e.target.value))}
-								className="px-3 py-2 text-base border rounded-lg border-organic-200 bg-organic-50 focus:outline-none focus:ring-2 focus:ring-organic-300"
-							/>
-						</label>
-						<label className="flex flex-col gap-2">
-							<span className="text-sm font-semibold text-organic-300">
-								Max Concurrent Tasks Per Worker
-							</span>
-							<input
-								type="number"
-								value={maxConcurrentTasks}
 								min={1}
-								max={10}
-								onChange={(e) => setMaxConcurrentTasks(Number(e.target.value))}
-								className="px-3 py-2 text-base border rounded-lg border-organic-200 bg-organic-50 focus:outline-none focus:ring-2 focus:ring-organic-300"
+								onChange={(event) => updateFiniteNumber(event, setDraftSize)}
+								required
+								type="number"
+								value={draftSize}
 							/>
 						</label>
-						<div className="flex items-end">
+						<label>
+							<span>Tasks per worker</span>
+							<input
+								max={8}
+								min={1}
+								onChange={(event) =>
+									updateFiniteNumber(event, setDraftConcurrency)
+								}
+								required
+								type="number"
+								value={draftConcurrency}
+							/>
+						</label>
+						<button className="button button-secondary" type="submit">
+							Apply and restart
+						</button>
+					</form>
+
+					<div className="workload-list">
+						<article className="workload">
+							<div className="workload-copy">
+								<span className="workload-kind">CPU task</span>
+								<h3>Fibonacci</h3>
+								<p>
+									Run one recursive calculation through{" "}
+									<code>useWorkerTask</code>.
+								</p>
+							</div>
+							<div className="workload-action">
+								<label>
+									<span>Input</span>
+									<input
+										max={45}
+										min={0}
+										onChange={(event) => updateFiniteNumber(event, setFibInput)}
+										required
+										type="number"
+										value={fibInput}
+									/>
+								</label>
+								<button
+									className="button button-primary"
+									disabled={!poolReady || fibTask.status === "running"}
+									onClick={runFibonacci}
+									type="button"
+								>
+									{fibTask.status === "running" ? "Running" : "Calculate"}
+								</button>
+							</div>
+							<output className="task-output" aria-live="polite">
+								{fibTask.result === null
+									? "No result yet"
+									: `Result: ${fibTask.result}`}
+							</output>
+						</article>
+
+						<article className="workload">
+							<div className="workload-copy">
+								<span className="workload-kind">Typed transform</span>
+								<h3>Analyze text</h3>
+								<p>
+									Return a structured result from a dedicated worker method.
+								</p>
+							</div>
+							<div className="workload-action workload-action-wide">
+								<label>
+									<span>Text</span>
+									<input
+										onChange={(event) =>
+											setTextInput(event.currentTarget.value)
+										}
+										type="text"
+										value={textInput}
+									/>
+								</label>
+								<button
+									className="button button-primary"
+									disabled={
+										!poolReady ||
+										textTask.status === "running" ||
+										textInput.length === 0
+									}
+									onClick={runTextAnalysis}
+									type="button"
+								>
+									{textTask.status === "running" ? "Running" : "Analyze"}
+								</button>
+							</div>
+							<output className="task-output" aria-live="polite">
+								{textTask.result === null
+									? "No result yet"
+									: `${textTask.result.words} words, ${textTask.result.characters} characters, reversed: ${textTask.result.reversed}`}
+							</output>
+						</article>
+
+						<article className="workload workload-featured">
+							<div className="workload-copy">
+								<span className="workload-kind">Scheduler probe</span>
+								<h3>Saturate the pool</h3>
+								<p>
+									Queue deterministic delayed tasks and watch capacity move in
+									real time.
+								</p>
+							</div>
+							<div className="batch-controls">
+								<label>
+									<span>Tasks</span>
+									<input
+										max={40}
+										min={1}
+										onChange={(event) =>
+											updateFiniteNumber(event, setBatchCount)
+										}
+										required
+										type="number"
+										value={batchCount}
+									/>
+								</label>
+								<label>
+									<span>Delay, ms</span>
+									<input
+										max={5_000}
+										min={0}
+										onChange={(event) =>
+											updateFiniteNumber(event, setBatchDelay)
+										}
+										required
+										type="number"
+										value={batchDelay}
+									/>
+								</label>
+								<button
+									className="button button-primary"
+									disabled={!poolReady || batch.status === "running"}
+									onClick={() => void runBatch()}
+									type="button"
+								>
+									{batch.status === "running" ? "Dispatching" : "Run batch"}
+								</button>
+							</div>
+							<output className="task-output" aria-live="polite">
+								{batch.status === "idle"
+									? "No batch has run"
+									: `${batch.completed} completed, ${batch.failed} failed`}
+							</output>
+						</article>
+					</div>
+				</section>
+
+				<aside className="telemetry-column">
+					<section
+						className="panel telemetry"
+						aria-labelledby="telemetry-heading"
+					>
+						<div className="panel-heading compact-heading">
+							<div>
+								<p className="section-index">02 / Telemetry</p>
+								<h2 id="telemetry-heading">Scheduler health</h2>
+							</div>
+						</div>
+						<div className="meter-heading">
+							<span>Active capacity</span>
+							<strong>{utilization}%</strong>
+						</div>
+						<div
+							aria-label={`${utilization}% of task capacity is active`}
+							aria-valuemax={100}
+							aria-valuemin={0}
+							aria-valuenow={utilization}
+							className="meter"
+							role="progressbar"
+							tabIndex={0}
+						>
+							<span style={{ width: `${utilization}%` }} />
+						</div>
+						<dl className="telemetry-grid">
+							<div>
+								<dt>Capacity</dt>
+								<dd>{capacity}</dd>
+							</div>
+							<div>
+								<dt>Available</dt>
+								<dd>{stats?.available ?? config.size}</dd>
+							</div>
+							<div>
+								<dt>Started</dt>
+								<dd>{stats?.startedTasks ?? 0}</dd>
+							</div>
+							<div>
+								<dt>Completed</dt>
+								<dd>{stats?.completedTasks ?? 0}</dd>
+							</div>
+							<div>
+								<dt>Timed out</dt>
+								<dd>{stats?.timedOutTasks ?? 0}</dd>
+							</div>
+							<div>
+								<dt>Dropped</dt>
+								<dd>{stats?.droppedTasks ?? 0}</dd>
+							</div>
+						</dl>
+						<p className="configuration-note">
+							Queue limit 48, queue deadline 5 seconds, task deadline 30
+							seconds.
+						</p>
+					</section>
+
+					<section
+						className="panel event-panel"
+						aria-labelledby="events-heading"
+					>
+						<div className="event-heading">
+							<div>
+								<p className="section-index">03 / Events</p>
+								<h2 id="events-heading">Scheduler stream</h2>
+							</div>
 							<button
+								className="text-button"
+								onClick={() => setLogs([])}
 								type="button"
-								onClick={recreatePool}
-								disabled={isRecreatingPool}
-								className="w-full px-4 py-2 text-base font-semibold transition shadow text-organic-50 bg-organic-400 rounded-lg hover:bg-organic-500 disabled:opacity-50 disabled:cursor-not-allowed"
 							>
-								{isRecreatingPool ? "Updating..." : "Apply Changes"}
+								Clear
 							</button>
 						</div>
-					</div>
-					<div className="mt-3 text-xs text-organic-500">
-						<p>
-							<strong>Pool Size:</strong> Number of worker threads in the pool
-						</p>
-						<p>
-							<strong>Max Concurrent Tasks:</strong> How many tasks each worker
-							can handle simultaneously (great for I/O-bound operations)
-						</p>
-					</div>
-				</div>
-
-				{/* Controls & Worker Stats */}
-				<div className="flex flex-wrap items-end justify-center gap-8 mb-10">
-					<label className="flex flex-col gap-1 min-w-[200px] text-base font-semibold">
-						<span className="text-organic-300">
-							Tasks (parallel for all actions)
-						</span>
-						<input
-							type="number"
-							aria-label="Number of parallel tasks"
-							value={taskCount}
-							min={1}
-							max={100}
-							onChange={(e) => setTaskCount(Number(e.target.value))}
-							className="px-4 py-3 text-lg transition border-2 shadow-sm bg-organic-50 border-organic-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-organic-300 focus:bg-organic-100"
-						/>
-					</label>
-					<div className="flex flex-row flex-wrap items-end gap-5 py-3 border shadow bg-organic-50/90 rounded-2xl px-7 border-organic-200">
-						<div className="flex flex-col items-center min-w-[70px]">
-							<span className="text-xs text-organic-300">Workers</span>
-							<span className="text-xl font-bold text-organic-300">
-								{stats.size}
-							</span>
-						</div>
-						<div className="flex flex-col items-center min-w-[70px]">
-							<span className="text-xs text-organic-300">Available</span>
-							<span className="text-xl font-bold text-organic-300">
-								{stats.available}
-							</span>
-						</div>
-						<div className="flex flex-col items-center min-w-[70px]">
-							<span className="text-xs text-organic-300">Queue</span>
-							<span className="text-xl font-bold text-organic-300">
-								{stats.queue}
-							</span>
-						</div>
-						<div className="flex flex-col items-center min-w-[70px]">
-							<span className="text-xs text-organic-300">Active Workers</span>
-							<span className="text-lg font-bold text-organic-300">
-								{stats.workers}
-							</span>
-						</div>
-						<div className="flex flex-col items-center min-w-[70px]">
-							<span className="text-xs text-organic-300">Idle Workers</span>
-							<span className="text-lg font-bold text-organic-300">
-								{stats.idleWorkers}
-							</span>
-						</div>
-						<div className="flex flex-col items-center min-w-[70px]">
-							<span className="text-xs text-organic-300">Running Tasks</span>
-							<span className="text-lg font-bold text-green-600">
-								{stats.runningTasks}
-							</span>
-						</div>
-						<div className="flex flex-col items-center min-w-[70px]">
-							<span className="text-xs text-organic-300">Can Accept More</span>
-							<span className="text-lg font-bold text-blue-600">
-								{stats.availableForConcurrency}
-							</span>
-						</div>
-					</div>
-				</div>
-				<div className="grid gap-6 mb-10 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-					{/* Fibonacci Section - CPU Bound */}
-					<div className="relative flex flex-col gap-4 p-6 transition-shadow border-l-8 shadow-xl bg-organic-50/80 border-red-200 rounded-2xl hover:shadow-2xl group">
-						<div className="absolute text-2xl select-none -left-5 top-4">
-							🧮
-						</div>
-						<h2 className="flex items-center gap-2 mb-1 text-lg font-bold text-organic-900 font-display">
-							Fibonacci Calculator
-						</h2>
-						<span className="text-xs font-semibold text-red-600 bg-red-100 px-2 py-1 rounded">
-							CPU-BOUND
-						</span>
-						<label className="flex flex-col gap-1 text-sm font-semibold">
-							<span>Number (n)</span>
-							<input
-								type="number"
-								value={inputNumber}
-								min={1}
-								max={100}
-								onChange={(e) => setInputNumber(Number(e.target.value))}
-								className="px-3 py-2 text-base transition border rounded-lg border-organic-200 bg-organic-50 focus:outline-none focus:ring-2 focus:ring-organic-400 focus:bg-organic-100"
-							/>
-						</label>
-						<button
-							className="px-4 py-2 text-base font-bold transition shadow text-organic-900 bg-organic-200 rounded-xl hover:bg-organic-300 hover:shadow-lg"
-							type="button"
-							onClick={runTasks}
-						>
-							Calculate Fib (n)
-						</button>
-						<span className="mt-1 text-xs text-organic-500">
-							Runs <b>{taskCount}</b> parallel Fibonacci calculations. Best with
-							maxConcurrent=1.
-						</span>
-					</div>
-
-					{/* CountWords Section - I/O Bound */}
-					<div className="relative flex flex-col gap-4 p-6 transition-shadow border-l-8 shadow-xl bg-organic-50/80 border-blue-200 rounded-2xl hover:shadow-2xl group">
-						<div className="absolute text-2xl select-none -left-5 top-4">
-							📖
-						</div>
-						<h2 className="flex items-center gap-2 mb-1 text-lg font-bold text-organic-900 font-display">
-							Word Counter
-						</h2>
-						<span className="text-xs font-semibold text-blue-600 bg-blue-100 px-2 py-1 rounded">
-							I/O-BOUND
-						</span>
-						<label className="flex flex-col gap-1 text-sm font-semibold">
-							<span>Input Text</span>
-							<input
-								type="text"
-								value={inputText}
-								onChange={(e) => setInputText(e.target.value)}
-								placeholder="Type a sentence..."
-								className="px-3 py-2 text-base transition border rounded-lg border-organic-200 bg-organic-50 focus:outline-none focus:ring-2 focus:ring-organic-400 focus:bg-organic-100"
-							/>
-						</label>
-						<button
-							className="px-4 py-2 text-base font-bold transition shadow text-organic-900 bg-organic-200 rounded-xl hover:bg-organic-300 hover:shadow-lg"
-							type="button"
-							onClick={runCountWords}
-						>
-							Count Words
-						</button>
-						<span className="mt-1 text-xs text-organic-500">
-							Counts words with simulated delay. Benefits from concurrent
-							execution.
-						</span>
-					</div>
-
-					{/* ReverseString Section - I/O Bound */}
-					<div className="relative flex flex-col gap-4 p-6 transition-shadow border-l-8 shadow-xl bg-organic-50/80 border-blue-200 rounded-2xl hover:shadow-2xl group">
-						<div className="absolute text-2xl select-none -left-5 top-4">
-							🔄
-						</div>
-						<h2 className="flex items-center gap-2 mb-1 text-lg font-bold text-organic-900 font-display">
-							String Reverser
-						</h2>
-						<span className="text-xs font-semibold text-blue-600 bg-blue-100 px-2 py-1 rounded">
-							I/O-BOUND
-						</span>
-						<label className="flex flex-col gap-1 text-sm font-semibold">
-							<span>Input Text</span>
-							<input
-								type="text"
-								value={reverseText}
-								onChange={(e) => setReverseText(e.target.value)}
-								placeholder="Type text to reverse..."
-								className="px-3 py-2 text-base transition border rounded-lg border-organic-200 bg-organic-50 focus:outline-none focus:ring-2 focus:ring-organic-400 focus:bg-organic-100"
-							/>
-						</label>
-						<button
-							className="px-4 py-2 text-base font-bold transition shadow text-organic-900 bg-organic-200 rounded-xl hover:bg-organic-300 hover:shadow-lg"
-							type="button"
-							onClick={runReverseString}
-						>
-							Reverse String
-						</button>
-						<span className="mt-1 text-xs text-organic-500">
-							Reverses text with simulated delay. Benefits from concurrent
-							execution.
-						</span>
-					</div>
-
-					{/* Fetch Data Section - I/O Bound */}
-					<div className="relative flex flex-col gap-4 p-6 transition-shadow border-l-8 shadow-xl bg-organic-50/80 border-green-200 rounded-2xl hover:shadow-2xl group">
-						<div className="absolute text-2xl select-none -left-5 top-4">
-							🌐
-						</div>
-						<h2 className="flex items-center gap-2 mb-1 text-lg font-bold text-organic-900 font-display">
-							Data Fetcher
-						</h2>
-						<span className="text-xs font-semibold text-green-600 bg-green-100 px-2 py-1 rounded">
-							I/O-BOUND
-						</span>
-						<div className="flex-1 flex flex-col justify-center">
-							<p className="text-sm text-organic-600 mb-3">
-								Simulates fetching data from various APIs with random delays.
+						{visibleError ? (
+							<p className="error-banner" role="alert">
+								{toErrorMessage(visibleError)}
 							</p>
-						</div>
-						<button
-							className="px-4 py-2 text-base font-bold transition shadow text-organic-900 bg-organic-200 rounded-xl hover:bg-organic-300 hover:shadow-lg"
-							type="button"
-							onClick={runFetchData}
-						>
-							Fetch Data
-						</button>
-						<span className="mt-1 text-xs text-organic-500">
-							Perfect for testing concurrent execution with high maxConcurrent
-							values.
-						</span>
-					</div>
-
-					{/* Process Data Section - I/O Bound */}
-					<div className="relative flex flex-col gap-4 p-6 transition-shadow border-l-8 shadow-xl bg-organic-50/80 border-purple-200 rounded-2xl hover:shadow-2xl group">
-						<div className="absolute text-2xl select-none -left-5 top-4">⚙️</div>
-						<h2 className="flex items-center gap-2 mb-1 text-lg font-bold text-organic-900 font-display">
-							Data Processor
-						</h2>
-						<span className="text-xs font-semibold text-purple-600 bg-purple-100 px-2 py-1 rounded">
-							I/O-BOUND
-						</span>
-						<div className="flex-1 flex flex-col justify-center">
-							<p className="text-sm text-organic-600 mb-3">
-								Simulates processing data batches with variable delays.
-							</p>
-						</div>
-						<button
-							className="px-4 py-2 text-base font-bold transition shadow text-organic-900 bg-organic-200 rounded-xl hover:bg-organic-300 hover:shadow-lg"
-							type="button"
-							onClick={runProcessData}
-						>
-							Process Data
-						</button>
-						<span className="mt-1 text-xs text-organic-500">
-							Great for demonstrating concurrent task processing benefits.
-						</span>
-					</div>
-				</div>
-
-				{/* Information Section */}
-				<div className="mb-8 p-6 bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-blue-200 rounded-2xl shadow-lg">
-					<h2 className="mb-4 text-xl font-bold text-blue-600 font-display">
-						💡 Understanding Concurrent Execution
-					</h2>
-					<div className="grid gap-4 md:grid-cols-2">
-						<div>
-							<h3 className="font-semibold text-blue-800 mb-2">
-								🔴 CPU-Bound Tasks (Red)
-							</h3>
-							<p className="text-sm text-blue-700">
-								Tasks like Fibonacci calculations use CPU intensively. For
-								these, keep
-								<strong> Max Concurrent Tasks = 1</strong> to avoid competing
-								for CPU resources.
-							</p>
-						</div>
-						<div>
-							<h3 className="font-semibold text-blue-800 mb-2">
-								🔵 I/O-Bound Tasks (Blue/Green/Purple)
-							</h3>
-							<p className="text-sm text-blue-700">
-								Tasks with delays (network requests, file operations) benefit
-								from
-								<strong> Max Concurrent Tasks &gt; 1</strong>. Try setting it to
-								3-5 and see the performance improvement!
-							</p>
-						</div>
-					</div>
-					<div className="mt-4 p-3 bg-yellow-100 border border-yellow-300 rounded-lg">
-						<p className="text-sm text-yellow-800">
-							<strong>💡 Tip:</strong> Watch the "Running Tasks" and "Can Accept
-							More" stats while tasks execute. With concurrent execution
-							enabled, you'll see multiple tasks running simultaneously on each
-							worker!
-						</p>
-					</div>
-				</div>
-
-				<div className="shadow rounded-xl">
-					<div className="flex items-center justify-between gap-2 px-6 py-3 text-lg font-semibold border-b text-organic-400 bg-gradient-to-r from-organic-100 to-organic-100 border-organic-200 rounded-t-xl font-display">
-						<div>
-							<span>📜</span> Logs
-						</div>
-						<button
-							className="flex items-center justify-center px-5 py-1 transition shadow text-organic-50 bg-organic-500 rounded-xl hover:bg-organic-600 focus:outline-none focus:ring-2 focus:ring-organic-400"
-							type="button"
-							onClick={() => setLogs([])}
-							title="Clear all logs"
-							aria-label="Clear logs"
-						>
-							Clear
-						</button>
-					</div>
-					<ul
-						ref={logsListRef}
-						className="px-6 py-4 m-0 overflow-y-auto font-mono text-sm list-none max-h-96 bg-organic-50"
-					>
-						{logs.length === 0 && (
-							<li className="italic text-organic-300">No logs yet.</li>
-						)}
-						{logs.map((log) => (
-							<li key={log.key} className="mb-1 break-all text-organic-900">
-								{log.text}
-							</li>
-						))}
-					</ul>
-				</div>
+						) : null}
+						<ol className="event-list" ref={logListRef} aria-live="polite">
+							{logs.length === 0 ? (
+								<li className="empty-state">
+									Dispatch a workload to populate the event stream.
+								</li>
+							) : (
+								logs.map((entry) => (
+									<li className={`event event-${entry.kind}`} key={entry.id}>
+										<span>{String(entry.id).padStart(2, "0")}</span>
+										<p>{entry.detail}</p>
+									</li>
+								))
+							)}
+						</ol>
+					</section>
+				</aside>
 			</div>
-		</div>
+
+			<footer>
+				<span>
+					Core scheduling and React lifecycle bindings, exercised in one browser
+					session.
+				</span>
+				<code>
+					{config.size} workers x {config.concurrency} tasks
+				</code>
+			</footer>
+		</main>
 	);
 }
 

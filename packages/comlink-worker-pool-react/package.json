@@ -1,12 +1,28 @@
 {
 	"name": "comlink-worker-pool-react",
 	"version": "0.0.9",
-	"description": "React hooks for comlink-worker-pool. Seamlessly integrate web worker pools into React apps with the useWorkerPool hook",
+	"description": "Typed React hooks for owning Comlink worker pools and tracking worker task state",
 	"author": "Natan Elia",
 	"license": "MIT",
+	"keywords": [
+		"comlink",
+		"react",
+		"react-hooks",
+		"typescript",
+		"web-worker",
+		"worker-pool"
+	],
+	"homepage": "https://github.com/natanelia/comlink-worker-pool/tree/main/packages/comlink-worker-pool-react#readme",
+	"bugs": {
+		"url": "https://github.com/natanelia/comlink-worker-pool/issues"
+	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/natanelia/comlink-worker-pool.git"
+		"url": "git+https://github.com/natanelia/comlink-worker-pool.git",
+		"directory": "packages/comlink-worker-pool-react"
+	},
+	"engines": {
+		"node": ">=18"
 	},
 	"type": "module",
 	"main": "./dist/index.cjs",
@@ -26,6 +42,9 @@
 		}
 	},
 	"sideEffects": false,
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"build": "bunup",
 		"test": "bun test",

@@ -5,7 +5,8 @@ export default defineConfig({
 	outDir: "dist",
 	format: ["esm", "cjs"],
 	dts: true,
-	minify: true,
+	minify: false,
+	sourcemap: "linked",
 	clean: true,
 	outputExtension: ({ format }) => ({
 		js: format === "esm" ? ".js" : ".cjs",

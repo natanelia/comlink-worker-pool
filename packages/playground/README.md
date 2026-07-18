@@ -1,46 +1,26 @@
-# 🧪 comlink-worker-pool Playground
+# Playground
 
-[![bun compatible](https://img.shields.io/badge/bun-%E2%9C%94%EF%B8%8F-green)](https://bun.sh/)
-[![CI](https://github.com/natanelia/comlink-worker-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/natanelia/comlink-worker-pool/actions)
+The playground is a browser workbench for `comlink-worker-pool` and `comlink-worker-pool-react`.
 
-> 🚀 **Try the [Live Playground Demo](https://natanelia.github.io/comlink-worker-pool/)!**
+It uses real module workers and demonstrates:
 
-**Interactive React demo for [comlink-worker-pool](../comlink-worker-pool/README.md) and [comlink-worker-pool-react](../comlink-worker-pool-react/README.md).**
+- `useWorkerPool` lifecycle ownership and configuration changes
+- `useWorkerTask` with inferred method arguments and results
+- live `WorkerPoolStats` capacity and outcome counters
+- structured scheduler and worker lifecycle events
+- CPU, typed transform, and deterministic delayed batch workloads
+- bounded queue and task deadlines
 
-> **Note:** Bun is used to run the playground locally, but is not required for using the core libraries in your own project.
-
-> ⚡️ See worker pools in action — live, in your browser!
-
-![Demo GIF](https://placehold.co/600x200?text=Demo+Coming+Soon)
-
----
-
-## 🚀 Try It Now
-
-From the monorepo root:
+[Open the live playground](https://natanelia.github.io/comlink-worker-pool/), or run it from the repository root:
 
 ```bash
-bun run --filter playground dev
+bun install
+bun run playground:dev
 ```
 
-Or try the live playground at: [https://natanelia.github.io/comlink-worker-pool/](https://natanelia.github.io/comlink-worker-pool/)
+The implementation is intentionally available as a complete example:
 
----
+- [React application](src/App.tsx)
+- [Comlink worker](src/worker.ts)
 
-## ✨ Features
-
-- Live demo of async worker pool tasks
-- Real-time stats and task logs
-- Edit and run code in the browser
-- Built with [Vite](https://vitejs.dev/) for instant feedback
-
----
-
-## 📚 Related Packages
-
-- [comlink-worker-pool](../comlink-worker-pool/README.md): Core worker pool library
-- [comlink-worker-pool-react](../comlink-worker-pool-react/README.md): React bindings
-
----
-
-See the [global README](../../README.md) for monorepo setup and structure.
+The playground runs predefined workloads. It does not execute user-authored code or make simulated network requests.

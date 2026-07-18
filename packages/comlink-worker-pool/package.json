@@ -1,12 +1,28 @@
 {
 	"name": "comlink-worker-pool",
 	"version": "0.0.9",
-	"description": "High-performance web worker pool library with TypeScript support, automatic lifecycle management, and parallel task execution",
+	"description": "A typed Comlink worker pool with bounded scheduling, observable lifecycle state, and graceful shutdown",
 	"author": "Natan Elia",
 	"license": "MIT",
+	"keywords": [
+		"comlink",
+		"concurrency",
+		"parallelism",
+		"typescript",
+		"web-worker",
+		"worker-pool"
+	],
+	"homepage": "https://github.com/natanelia/comlink-worker-pool/tree/main/packages/comlink-worker-pool#readme",
+	"bugs": {
+		"url": "https://github.com/natanelia/comlink-worker-pool/issues"
+	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/natanelia/comlink-worker-pool.git"
+		"url": "git+https://github.com/natanelia/comlink-worker-pool.git",
+		"directory": "packages/comlink-worker-pool"
+	},
+	"engines": {
+		"node": ">=18"
 	},
 	"main": "./dist/index.cjs",
 	"module": "./dist/index.js",
@@ -26,6 +42,9 @@
 	},
 	"sideEffects": false,
 	"type": "module",
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"build": "bunup",
 		"test": "bun test",
