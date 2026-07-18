@@ -21,6 +21,8 @@ export interface UseWorkerPoolOptions<TProxy extends ProxyDefault> {
 	poolSize?: number;
 	/** Receives live pool statistics without causing pool reconfiguration. */
 	onUpdateStats?: WorkerPoolOptions<TProxy>["onUpdateStats"];
+	/** Receives structured task and worker events without reconfiguring the pool. */
+	onEvent?: WorkerPoolOptions<TProxy>["onEvent"];
 	/** Terminates an idle worker after this duration. */
 	workerIdleTimeoutMs?: number;
 	/** Retires a worker after this many assigned tasks. */
@@ -97,12 +99,14 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 	const generationRef = useRef(0);
 	const latestCallIdRef = useRef(0);
 	const statsCallbackRef = useRef(options.onUpdateStats);
+	const eventCallbackRef = useRef(options.onEvent);
 	const workerFactoryRef = useRef(options.workerFactory);
 	const proxyFactoryRef = useRef(options.proxyFactory);
 	const proxyCleanupRef = useRef(options.proxyCleanup);
 	const workerTerminatorRef = useRef(options.workerTerminator);
 	const terminationErrorCallbackRef = useRef(options.onWorkerTerminationError);
 	statsCallbackRef.current = options.onUpdateStats;
+	eventCallbackRef.current = options.onEvent;
 	workerFactoryRef.current = options.workerFactory;
 	proxyFactoryRef.current = options.proxyFactory;
 	proxyCleanupRef.current = options.proxyCleanup;
@@ -149,6 +153,11 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 				onUpdateStats: (stats: WorkerPoolStats) => {
 					if (generationRef.current === generation) {
 						statsCallbackRef.current?.(stats);
+					}
+				},
+				onEvent: (event) => {
+					if (generationRef.current === generation) {
+						eventCallbackRef.current?.(event);
 					}
 				},
 				workerIdleTimeoutMs,

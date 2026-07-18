@@ -74,6 +74,7 @@ const pool = new WorkerPool<WorkerApi>({
     new Worker(new URL("./worker.ts", import.meta.url), { type: "module" }),
   proxyFactory: (worker) => Comlink.wrap<WorkerApi>(worker),
   onUpdateStats: (stats) => console.log("Pool stats:", stats),
+  onEvent: (event) => console.log("Pool event:", event),
   workerIdleTimeoutMs: 30000, // Optional: terminate idle workers after 30s
   maxTasksPerWorker: 100, // Optional: terminate workers after 100 tasks
   maxWorkerLifetimeMs: 5 * 60 * 1000, // Optional: terminate workers after 5 minutes
@@ -98,6 +99,7 @@ console.log(pool.getStats());
 | `workerFactory`               | `() => Worker`                     | Factory function to create new workers           |
 | `proxyFactory`                | `(worker: Worker) => P`            | Factory to wrap a worker with Comlink or similar |
 | `onUpdateStats`               | `(stats: WorkerPoolStats) => void` | Callback on pool stats update (optional)         |
+| `onEvent`                     | `(event: WorkerPoolEvent) => void` | Structured, argument-free task and worker events |
 | `workerIdleTimeoutMs`         | `number`                           | Idle timeout for terminating workers (optional)  |
 | `maxTasksPerWorker`           | `number`                           | Max tasks per worker before termination (optional) |
 | `maxWorkerLifetimeMs`         | `number`                           | Max worker lifetime in milliseconds (optional)   |
@@ -301,16 +303,20 @@ const cpuPool = new WorkerPool<ComputeWorker>({
 });
 ```
 
-#### Updated Statistics
+#### Scheduling observability
 
-When using concurrent execution, the pool statistics include additional information:
+`getStats()` and `onUpdateStats` expose live capacity, queue age, lifecycle
+state, and cumulative task outcomes. `onEvent` provides per-task queue wait and
+execution duration without exposing task arguments:
 
 ```ts
-const stats = pool.getStats();
-console.log({
-  runningTasks: stats.runningTasks, // Total tasks currently executing
-  availableForConcurrency: stats.availableForConcurrency, // Workers that can accept more tasks
-  // ... other existing stats
+const pool = new WorkerPool<WorkerApi>({
+  // ...factories and size
+  onEvent: (event) => {
+    if (event.type === "task-settled") {
+      console.log(event.taskId, event.outcome, event.durationMs);
+    }
+  },
 });
 ```
 
@@ -350,9 +356,14 @@ produced side effects.
 
 ```ts
 interface WorkerPoolStats {
+  state: "running" | "draining" | "closed";
   size: number;                    // Maximum scheduler-managed workers
+  maxConcurrentTasks: number;      // Configured task concurrency ceiling
   available: number;               // Workers available to take new tasks
   queue: number;                   // Tasks waiting in the queue
+  queueCapacity: number | null;    // Bounded queue limit, or null
+  queueCapacityRemaining: number | null;
+  oldestQueuedTaskAgeMs: number | null;
   workers: number;                 // Healthy plus quarantined physical workers
   healthyWorkers: number;          // Managed workers, including busy workers retiring afterward
   quarantinedWorkers: number;      // Workers with unconfirmed termination
@@ -361,6 +372,13 @@ interface WorkerPoolStats {
   idleWorkers: number;             // Workers with no running tasks
   runningTasks: number;            // Total tasks currently executing
   availableForConcurrency: number; // Workers that can accept additional concurrent tasks
+  submittedTasks: number;          // Cumulative valid calls received
+  startedTasks: number;            // Cumulative worker assignments
+  completedTasks: number;          // Cumulative successful calls
+  failedTasks: number;             // Other caller-visible failures
+  cancelledTasks: number;          // AbortSignal cancellations
+  timedOutTasks: number;           // Queue and task timeouts
+  droppedTasks: number;            // drop-oldest evictions
 }
 ```
 

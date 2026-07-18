@@ -76,9 +76,14 @@ function App() {
 	};
 
 	const [stats, setStats] = useState<WorkerPoolStats>({
+		state: "running",
 		size: 0,
+		maxConcurrentTasks: 0,
 		available: 0,
 		queue: 0,
+		queueCapacity: null,
+		queueCapacityRemaining: null,
+		oldestQueuedTaskAgeMs: null,
 		workers: 0,
 		healthyWorkers: 0,
 		quarantinedWorkers: 0,
@@ -87,6 +92,13 @@ function App() {
 		idleWorkers: 0,
 		runningTasks: 0,
 		availableForConcurrency: 0,
+		submittedTasks: 0,
+		startedTasks: 0,
+		completedTasks: 0,
+		failedTasks: 0,
+		cancelledTasks: 0,
+		timedOutTasks: 0,
+		droppedTasks: 0,
 	});
 
 	// Utility to format log messages

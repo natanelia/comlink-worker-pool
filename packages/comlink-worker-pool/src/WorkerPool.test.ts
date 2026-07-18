@@ -168,9 +168,14 @@ describe("WorkerPool", () => {
 			onUpdateStats: (s) => stats.push({ ...s }),
 		});
 		expect(stats[stats.length - 1]).toEqual({
+			state: "running",
 			size: 2,
+			maxConcurrentTasks: 2,
 			available: 2,
 			queue: 0,
+			queueCapacity: null,
+			queueCapacityRemaining: null,
+			oldestQueuedTaskAgeMs: null,
 			idleWorkers: 0,
 			workers: 0,
 			healthyWorkers: 0,
@@ -179,6 +184,13 @@ describe("WorkerPool", () => {
 			terminationFailures: 0,
 			runningTasks: 0,
 			availableForConcurrency: 0,
+			submittedTasks: 0,
+			startedTasks: 0,
+			completedTasks: 0,
+			failedTasks: 0,
+			cancelledTasks: 0,
+			timedOutTasks: 0,
+			droppedTasks: 0,
 		});
 	});
 

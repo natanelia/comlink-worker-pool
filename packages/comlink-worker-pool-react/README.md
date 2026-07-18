@@ -110,6 +110,8 @@ alone do not recreate the pool.
 
 The core queue controls—`maxQueueSize`, `queueOverflowPolicy`, and
 `queueTimeoutMs`—are also forwarded and recreate the owned pool when changed.
+`onUpdateStats` and `onEvent` are forwarded through stable refs, so changing an
+observer does not recreate the pool.
 
 > 💡 **Tip:** Try the [live playground demo](https://natanelia.github.io/comlink-worker-pool/) for a full working example!
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import {
 	WorkerPoolCapacityError,
+	type WorkerPoolEvent,
 	type WorkerTerminationError,
 } from "comlink-worker-pool";
 import { type ReactNode, StrictMode } from "react";
@@ -243,6 +244,7 @@ describe("useWorkerPool", () => {
 	it("forwards bounded termination controls and failure callbacks", async () => {
 		const workers: MockWorker[] = [];
 		const terminationErrors: WorkerTerminationError[] = [];
+		const events: WorkerPoolEvent[] = [];
 		const { result, unmount } = renderHook(() =>
 			useWorkerPool<TestApi>({
 				poolSize: 1,
@@ -259,6 +261,7 @@ describe("useWorkerPool", () => {
 					throw new Error("host termination failed");
 				},
 				onWorkerTerminationError: (error) => terminationErrors.push(error),
+				onEvent: (event) => events.push(event),
 			}),
 		);
 		await waitFor(() => expect(result.current.api).not.toBeNull());
@@ -282,6 +285,18 @@ describe("useWorkerPool", () => {
 			attempt: 1,
 			exhausted: true,
 		});
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "task-settled",
+				outcome: "fulfilled",
+			}),
+		);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "worker-termination-failed",
+				exhausted: true,
+			}),
+		);
 		unmount();
 	});
 });

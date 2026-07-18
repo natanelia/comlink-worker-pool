@@ -159,9 +159,14 @@ describe("WorkerPool - lifecycle robustness", () => {
 		held.resolve("late");
 		await flushMicrotasks();
 		expect(pool.getStats()).toEqual({
+			state: "closed",
 			size: 1,
+			maxConcurrentTasks: 1,
 			available: 0,
 			queue: 0,
+			queueCapacity: null,
+			queueCapacityRemaining: null,
+			oldestQueuedTaskAgeMs: null,
 			workers: 0,
 			healthyWorkers: 0,
 			quarantinedWorkers: 0,
@@ -170,6 +175,13 @@ describe("WorkerPool - lifecycle robustness", () => {
 			idleWorkers: 0,
 			runningTasks: 0,
 			availableForConcurrency: 0,
+			submittedTasks: 2,
+			startedTasks: 1,
+			completedTasks: 0,
+			failedTasks: 2,
+			cancelledTasks: 0,
+			timedOutTasks: 0,
+			droppedTasks: 0,
 		});
 		await expect(api.run("after close")).rejects.toBeInstanceOf(
 			WorkerPoolTerminatedError,
@@ -829,6 +841,14 @@ describe("WorkerPool - lifecycle robustness", () => {
 				() => new WorkerPool({ ...makeOptions(), maxTasksPerWorker: value }),
 			).toThrow();
 		}
+		expect(
+			() =>
+				new WorkerPool({
+					...makeOptions(),
+					size: Number.MAX_SAFE_INTEGER,
+					maxConcurrentTasksPerWorker: 2,
+				}),
+		).toThrow(/safe integer/);
 		for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
 			expect(
 				() => new WorkerPool({ ...makeOptions(), workerIdleTimeoutMs: value }),
