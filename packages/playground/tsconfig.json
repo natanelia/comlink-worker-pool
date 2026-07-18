@@ -5,7 +5,8 @@
 		"moduleResolution": "Node",
 		"baseUrl": ".",
 		"paths": {
-			"comlink-worker-pool": ["../comlink-worker-pool/src/index.ts"]
+			"comlink-worker-pool": ["../comlink-worker-pool/src/index.ts"],
+			"comlink-worker-pool-react": ["../comlink-worker-pool-react/src/index.ts"]
 		},
 		"types": ["bun-types"],
 		"outDir": "dist",
