@@ -43,6 +43,7 @@ describe("useWorkerPool", () => {
 		// Wait for the hook to reach the desired state
 		await waitFor(() => {
 			expect(result.current.api).not.toBeNull();
+			expect(result.current.poolStatus).toBe("ready");
 			expect(result.current.status).toBe("idle");
 		});
 	});
@@ -106,6 +107,7 @@ describe("useWorkerPool", () => {
 		};
 		const { result } = renderHook(() => useWorkerPool(options));
 		await waitFor(() => {
+			expect(result.current.poolStatus).toBe("error");
 			expect(result.current.status).toBe("error");
 			expect(result.current.api).toBeNull();
 		});
@@ -120,6 +122,79 @@ describe("useWorkerPool", () => {
 		});
 		expect(callError).toBeInstanceOf(Error);
 		expect((callError as Error).message).toMatch(/not initialized/i);
+	});
+
+	it("closes the owned pool and exposes a closed lifecycle state", async () => {
+		const workers: MockWorker[] = [];
+		const { result } = renderHook(() =>
+			useWorkerPool<TestApi>({
+				poolSize: 1,
+				workerFactory: () => {
+					const worker = new MockWorker();
+					workers.push(worker);
+					return worker as unknown as Worker;
+				},
+				proxyFactory: () => testApiImpl,
+			}),
+		);
+		await waitFor(() => expect(result.current.poolStatus).toBe("ready"));
+		await act(async () => {
+			await result.current.call("add", 1, 2);
+		});
+
+		let report: Awaited<ReturnType<typeof result.current.close>> = null;
+		await act(async () => {
+			report = await result.current.close();
+		});
+		expect(report).toMatchObject({ confirmed: true });
+		expect(result.current.poolStatus).toBe("closed");
+		expect(result.current.api).toBeNull();
+		expect(result.current.status).toBe("idle");
+		expect(workers[0].terminateCalls).toBe(1);
+		let closedError: unknown;
+		await act(async () => {
+			try {
+				await result.current.call("add", 2, 3);
+			} catch (error) {
+				closedError = error;
+			}
+		});
+		expect(closedError).toBeInstanceOf(Error);
+		expect((closedError as Error).message).toMatch(/closed/i);
+	});
+
+	it("uses a conservative automatic pool size", async () => {
+		const originalConcurrency = Object.getOwnPropertyDescriptor(
+			navigator,
+			"hardwareConcurrency",
+		);
+		Object.defineProperty(navigator, "hardwareConcurrency", {
+			configurable: true,
+			value: 64,
+		});
+		const observedSizes: number[] = [];
+		try {
+			const { result, unmount } = renderHook(() =>
+				useWorkerPool<TestApi>({
+					workerFactory: () => new MockWorker() as unknown as Worker,
+					proxyFactory: () => testApiImpl,
+					onUpdateStats: (stats) => observedSizes.push(stats.size),
+				}),
+			);
+			await waitFor(() => expect(result.current.poolStatus).toBe("ready"));
+			expect(observedSizes[0]).toBe(4);
+			unmount();
+		} finally {
+			if (originalConcurrency) {
+				Object.defineProperty(
+					navigator,
+					"hardwareConcurrency",
+					originalConcurrency,
+				);
+			} else {
+				Reflect.deleteProperty(navigator, "hardwareConcurrency");
+			}
+		}
 	});
 
 	it("does not recreate the pool when inline factory identities change", async () => {
@@ -164,10 +239,12 @@ describe("useWorkerPool", () => {
 		await waitFor(() => expect(result.current.api).not.toBeNull());
 		const retainedApi = result.current.api as TestApi;
 		const retainedCall = result.current.call;
+		const retainedClose = result.current.close;
 		unmount();
 
 		await expect(retainedApi.add(1, 2)).rejects.toThrow(/terminated/i);
 		await expect(retainedCall("add", 1, 2)).rejects.toThrow(/terminated/i);
+		await expect(retainedClose()).resolves.toBeNull();
 		expect(workerCreations).toBe(0);
 	});
 

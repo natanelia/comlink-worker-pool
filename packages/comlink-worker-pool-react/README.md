@@ -65,7 +65,7 @@ expose(api);
 2. **Use the hook in your React component:**
 
 ```tsx
-import { useWorkerPool } from "comlink-worker-pool-react";
+import { useWorkerPool, useWorkerTask } from "comlink-worker-pool-react";
 import { wrap } from "comlink";
 
 type Api = {
@@ -73,7 +73,7 @@ type Api = {
 };
 
 function Calculator() {
-  const { status, result, error, call } = useWorkerPool<Api>({
+  const { poolStatus, status, result, error, call, close } = useWorkerPool<Api>({
     workerFactory: () =>
       new Worker(new URL("./worker", import.meta.url), { type: "module" }),
     proxyFactory: (worker) => wrap<Api>(worker),
@@ -84,8 +84,11 @@ function Calculator() {
 
   return (
     <div>
-      <button onClick={() => call("add", 2, 3)}>Add 2 + 3</button>
-      {status}
+      <button disabled={poolStatus !== "ready"} onClick={() => call("add", 2, 3)}>
+        Add 2 + 3
+      </button>
+      <button onClick={() => close()}>Close workers</button>
+      {poolStatus} / {status}
       {result !== null && <div>Result: {String(result)}</div>}
       {error && <div>Error: {String(error)}</div>}
     </div>
@@ -98,6 +101,21 @@ If a new `workerFactory`, `proxyFactory`, or `proxyCleanup` must take
 effect, change the `reconfigureKey` option explicitly. Pool-size and
 lifecycle-option changes reconfigure automatically. When calls overlap,
 status/result/error belong to the latest-started `call()`.
+
+`poolStatus` reports `"initializing"`, `"ready"`, `"error"`, or `"closed"`
+independently from task status. When `poolSize` is omitted, the hook leaves one
+logical core free and caps the automatic pool at four workers.
+
+For method-specific, fully inferred result state, bind `useWorkerTask` to the
+pool API:
+
+```tsx
+const pool = useWorkerPool<Api>({ workerFactory, proxyFactory });
+const addTask = useWorkerTask(pool.api, "add");
+
+await addTask.run(2, 3); // arguments and Promise<number> are inferred
+addTask.result; // number | null
+```
 
 The hook forwards the core pool's bounded termination options:
 `terminationFailureWorkerBuffer`, `terminationRetryAttempts`,

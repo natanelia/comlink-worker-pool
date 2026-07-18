@@ -2,11 +2,12 @@ import {
 	type WorkerFactory,
 	WorkerPool,
 	type WorkerPoolOptions,
+	type WorkerPoolShutdownReport,
 	type WorkerPoolStats,
 } from "comlink-worker-pool";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-interface ProxyDefault {
+export interface ProxyDefault {
 	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
 	[key: string]: (...args: any[]) => unknown;
 }
@@ -17,7 +18,7 @@ export interface UseWorkerPoolOptions<TProxy extends ProxyDefault> {
 	workerFactory: WorkerFactory;
 	/** Creates the proxy API for a Worker. */
 	proxyFactory: (worker: Worker) => TProxy;
-	/** Number of workers (defaults to navigator.hardwareConcurrency, then 4). */
+	/** Number of workers (defaults to min(4, hardwareConcurrency - 1), at least 1). */
 	poolSize?: number;
 	/** Receives live pool statistics without causing pool reconfiguration. */
 	onUpdateStats?: WorkerPoolOptions<TProxy>["onUpdateStats"];
@@ -67,6 +68,8 @@ export interface UseWorkerPoolOptions<TProxy extends ProxyDefault> {
 export interface UseWorkerPoolResult<TProxy extends ProxyDefault> {
 	/** Proxy API for direct calls, or null if initialization failed. */
 	api: TProxy | null;
+	/** Lifecycle of the owned pool, separate from the latest task status. */
+	poolStatus: "initializing" | "ready" | "error" | "closed";
 	/** State of the latest call started through call(). */
 	status: "idle" | "running" | "error" | "completed";
 	/** Result of the latest call started through call(). */
@@ -78,6 +81,8 @@ export interface UseWorkerPoolResult<TProxy extends ProxyDefault> {
 		method: K,
 		...args: Parameters<TProxy[K]>
 	): Promise<Awaited<ReturnType<TProxy[K]>>>;
+	/** Immediately closes the owned pool; null means no pool was created. */
+	close(): Promise<WorkerPoolShutdownReport | null>;
 }
 
 /**
@@ -96,8 +101,12 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 	const [result, setResult] = useState<unknown>(null);
 	const [error, setError] = useState<unknown>(null);
 	const [api, setApi] = useState<TProxy | null>(null);
+	const [poolStatus, setPoolStatus] = useState<
+		"initializing" | "ready" | "error" | "closed"
+	>("initializing");
 	const generationRef = useRef(0);
 	const latestCallIdRef = useRef(0);
+	const poolRef = useRef<WorkerPool<TProxy> | null>(null);
 	const statsCallbackRef = useRef(options.onUpdateStats);
 	const eventCallbackRef = useRef(options.onEvent);
 	const workerFactoryRef = useRef(options.workerFactory);
@@ -134,20 +143,22 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 		void reconfigureKey;
 		const generation = ++generationRef.current;
 		++latestCallIdRef.current;
+		setPoolStatus("initializing");
 		let pool: WorkerPool<TProxy> | null = null;
 
 		try {
-			const hardwareConcurrency =
+			const detectedConcurrency =
 				typeof navigator !== "undefined" &&
 				Number.isSafeInteger(navigator.hardwareConcurrency) &&
 				navigator.hardwareConcurrency > 0
 					? navigator.hardwareConcurrency
-					: 4;
+					: 2;
+			const defaultPoolSize = Math.max(1, Math.min(4, detectedConcurrency - 1));
 
 			// Capture factories for this generation. reconfigureKey is the explicit
 			// signal for replacing them; callback identity churn alone is ignored.
 			pool = new WorkerPool<TProxy>({
-				size: poolSize ?? hardwareConcurrency,
+				size: poolSize ?? defaultPoolSize,
 				workerFactory: workerFactoryRef.current,
 				proxyFactory: proxyFactoryRef.current,
 				onUpdateStats: (stats: WorkerPoolStats) => {
@@ -180,13 +191,17 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 					}
 				},
 			});
+			poolRef.current = pool;
 			setApi(pool.getApi());
+			setPoolStatus("ready");
 			setStatus("idle");
 			setResult(null);
 			setError(null);
 		} catch (initializationError) {
 			if (generationRef.current === generation) {
+				poolRef.current = null;
 				setApi(null);
+				setPoolStatus("error");
 				setStatus("error");
 				setResult(null);
 				setError(initializationError);
@@ -198,6 +213,7 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 				++generationRef.current;
 				++latestCallIdRef.current;
 			}
+			if (poolRef.current === pool) poolRef.current = null;
 			pool?.terminateAll();
 		};
 		// Factory changes are applied only when reconfigureKey changes. This makes
@@ -236,7 +252,11 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 				setError(null);
 			}
 			if (!api) {
-				const notInitialized = new Error("Worker pool not initialized");
+				const notInitialized = new Error(
+					poolStatus === "closed"
+						? "Worker pool is closed"
+						: "Worker pool not initialized",
+				);
 				if (isCurrent()) {
 					setStatus("error");
 					setError(notInitialized);
@@ -259,8 +279,21 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 				throw callError;
 			}
 		},
-		[api],
+		[api, poolStatus],
 	);
 
-	return { api, status, result, error, call };
+	const close =
+		useCallback(async (): Promise<WorkerPoolShutdownReport | null> => {
+			const pool = poolRef.current;
+			if (!pool) return null;
+			++latestCallIdRef.current;
+			setApi(null);
+			setPoolStatus("closed");
+			setStatus("idle");
+			setResult(null);
+			setError(null);
+			return pool.close();
+		}, []);
+
+	return { api, poolStatus, status, result, error, call, close };
 }
