@@ -19,6 +19,16 @@ export interface WorkerMetadata<TProxy, TTask, TResult> {
 	failureEventTypes: string[];
 }
 
+/** Consumes a callback's optional thenable so asynchronous failures stay isolated. */
+export function isolateAsyncFailure(result: unknown): void {
+	if (
+		result !== null &&
+		(typeof result === "object" || typeof result === "function")
+	) {
+		void Promise.resolve(result).catch(() => {});
+	}
+}
+
 export function monotonicNow(): number {
 	return typeof globalThis.performance?.now === "function"
 		? globalThis.performance.now()

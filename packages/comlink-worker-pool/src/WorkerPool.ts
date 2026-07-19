@@ -16,6 +16,7 @@ import {
 	assertNonNegativeInteger,
 	assertPositiveDuration,
 	assertPositiveInteger,
+	isolateAsyncFailure,
 	monotonicNow,
 } from "./internal/lifecycle";
 import { type ScheduledTask, SchedulerQueue } from "./internal/scheduler";
@@ -396,7 +397,7 @@ export class WorkerPool<
 					exhausted: error.exhausted,
 				});
 				try {
-					options.onWorkerTerminationError?.(error);
+					isolateAsyncFailure(options.onWorkerTerminationError?.(error));
 				} catch {
 					// Failure observers are isolated from scheduler control flow.
 				}
@@ -634,7 +635,9 @@ export class WorkerPool<
 		item: ScheduledTask<TTask, TResult>,
 		timeoutMs: number | undefined,
 	): void {
-		if (timeoutMs === undefined) return;
+		if (timeoutMs === undefined || item.settled || !this.queue.contains(item)) {
+			return;
+		}
 		const deadline = monotonicNow() + timeoutMs;
 		const schedule = () => {
 			if (!this.queue.contains(item)) return;
@@ -836,7 +839,7 @@ export class WorkerPool<
 						`Worker proxy method ${String(item.task.method)} is not a function`,
 					);
 				}
-				return method(...item.task.args);
+				return Reflect.apply(method, worker.proxy, item.task.args);
 			})
 			.then(
 				(result) => this._completeTask(worker, item, true, result as TResult),
@@ -880,10 +883,15 @@ export class WorkerPool<
 	private _handleWorkerFailure(
 		worker: WorkerMetadata<TProxy, TTask, TResult>,
 		reason: unknown,
+		triggeringTask?: ScheduledTask<TTask, TResult>,
 	): void {
 		if (!this._containsWorker(worker)) return;
 		for (const item of [...worker.activeTasks]) {
-			this._settleTask(item, false, reason);
+			const taskReason =
+				triggeringTask !== undefined && item !== triggeringTask
+					? new WorkerCrashedError(worker.id, reason)
+					: reason;
+			this._settleTask(item, false, taskReason);
 		}
 		worker.activeTasks.clear();
 		this._removeWorker(
@@ -981,7 +989,11 @@ export class WorkerPool<
 				return;
 			}
 			item.timeout = undefined;
-			this._handleWorkerFailure(worker, new WorkerTaskTimeoutError(timeoutMs));
+			this._handleWorkerFailure(
+				worker,
+				new WorkerTaskTimeoutError(timeoutMs),
+				item,
+			);
 		};
 		item.timeout = setTimeout(
 			schedule,
@@ -1115,13 +1127,13 @@ export class WorkerPool<
 	private _cleanupProxy(proxy: TProxy): void {
 		try {
 			if (this.proxyCleanup) {
-				this.proxyCleanup(proxy);
+				isolateAsyncFailure(this.proxyCleanup(proxy));
 				return;
 			}
 			const releasable = proxy as TProxy & {
 				[releaseProxy]?: () => void;
 			};
-			releasable[releaseProxy]?.();
+			isolateAsyncFailure(releasable[releaseProxy]?.());
 		} catch {
 			// Cleanup must not strand queued work or other workers.
 		}
@@ -1172,7 +1184,7 @@ export class WorkerPool<
 		}
 		if (!this.onUpdate) return;
 		try {
-			this.onUpdate(this.getStats());
+			isolateAsyncFailure(this.onUpdate(this.getStats()));
 		} catch {
 			// Observers are isolated from scheduler control flow by design.
 		}
@@ -1180,7 +1192,7 @@ export class WorkerPool<
 
 	private _emit(event: WorkerPoolEvent): void {
 		try {
-			this.onEvent?.(event);
+			isolateAsyncFailure(this.onEvent?.(event));
 		} catch {
 			// Event observers are isolated from scheduler control flow by design.
 		}

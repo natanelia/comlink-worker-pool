@@ -126,6 +126,24 @@ describe("WorkerPool - lifecycle robustness", () => {
 		pool.terminateAll();
 	});
 
+	test("preserves the proxy receiver when invoking methods", async () => {
+		const pool = new WorkerPool({
+			size: 1,
+			workerFactory: () => asWorker(new ControlledWorker()),
+			proxyFactory: () => ({
+				helper(): string {
+					return "receiver preserved";
+				},
+				run(): string {
+					return this.helper();
+				},
+			}),
+		});
+
+		await expect(pool.run("run", [])).resolves.toBe("receiver preserved");
+		await pool.close();
+	});
+
 	test("termination rejects active and queued work and ignores late completion", async () => {
 		const held = deferred<string>();
 		const workers: ControlledWorker[] = [];
@@ -367,6 +385,41 @@ describe("WorkerPool - lifecycle robustness", () => {
 		pool.terminateAll();
 	});
 
+	test("only classifies the task that reached its deadline as timed out", async () => {
+		const pool = new WorkerPool({
+			size: 1,
+			maxConcurrentTasksPerWorker: 2,
+			taskTimeoutMs: 60,
+			workerFactory: () => asWorker(new ControlledWorker()),
+			proxyFactory: () => ({
+				run: () => new Promise<number>(() => {}),
+			}),
+		});
+
+		const timedOut = pool.run("run", []);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		const sibling = pool.run("run", []);
+		const [timedOutResult, siblingResult] = await Promise.allSettled([
+			timedOut,
+			sibling,
+		]);
+
+		expect(timedOutResult).toMatchObject({
+			status: "rejected",
+			reason: expect.any(WorkerTaskTimeoutError),
+		});
+		expect(siblingResult).toMatchObject({
+			status: "rejected",
+			reason: expect.any(WorkerCrashedError),
+		});
+		expect(pool.getStats()).toMatchObject({
+			failedTasks: 1,
+			timedOutTasks: 1,
+		});
+
+		await pool.close();
+	});
+
 	test("task retirement is strict and never exceeds the physical size cap", async () => {
 		const firstTask = deferred<string>();
 		const workers: ControlledWorker[] = [];
@@ -454,6 +507,28 @@ describe("WorkerPool - lifecycle robustness", () => {
 		expect(workerCreations).toBe(0);
 		await expect(api.echo("ok")).resolves.toBe("ok");
 		pool.terminateAll();
+	});
+
+	test("isolates rejected promises returned by lifecycle callbacks", async () => {
+		const rejectAsync = () =>
+			Promise.reject(new Error("async observer failed"));
+		const pool = new WorkerPool({
+			size: 1,
+			terminationRetryAttempts: 0,
+			workerFactory: () => asWorker(new ControlledWorker()),
+			proxyFactory: () => ({ echo: async (value: string) => value }),
+			onEvent: rejectAsync,
+			onUpdateStats: rejectAsync,
+			onWorkerTerminationError: rejectAsync,
+			proxyCleanup: rejectAsync,
+			workerTerminator: () => {
+				throw new Error("termination failed");
+			},
+		});
+
+		await expect(pool.run("echo", ["ok"])).resolves.toBe("ok");
+		await expect(pool.close()).resolves.toMatchObject({ confirmed: false });
+		await flushMicrotasks();
 	});
 
 	test("default termination failure buffer is max(2, floor(size / 2))", async () => {
