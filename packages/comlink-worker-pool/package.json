@@ -1,6 +1,6 @@
 {
 	"name": "comlink-worker-pool",
-	"version": "0.0.9",
+	"version": "0.1.0",
 	"description": "A typed Comlink worker pool with bounded scheduling, observable lifecycle state, and graceful shutdown",
 	"author": "Natan Elia",
 	"license": "MIT",

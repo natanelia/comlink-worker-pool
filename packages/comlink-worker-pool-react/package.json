@@ -1,6 +1,6 @@
 {
 	"name": "comlink-worker-pool-react",
-	"version": "0.0.9",
+	"version": "0.1.0",
 	"description": "Typed React hooks for owning Comlink worker pools and tracking worker task state",
 	"author": "Natan Elia",
 	"license": "MIT",
@@ -52,7 +52,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"comlink-worker-pool": "^0.0.9"
+		"comlink-worker-pool": "^0.1.0"
 	},
 	"devDependencies": {
 		"@happy-dom/global-registrator": "^17.4.4",
