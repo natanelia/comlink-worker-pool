@@ -314,7 +314,7 @@ function App() {
 								<span className="workload-kind">CPU task</span>
 								<h3>Fibonacci</h3>
 								<p>
-									Run one recursive calculation through{" "}
+									Click repeatedly to queue recursive calculations through{" "}
 									<code>useWorkerTask</code>.
 								</p>
 							</div>
@@ -332,11 +332,11 @@ function App() {
 								</label>
 								<button
 									className="button button-primary"
-									disabled={!poolReady || fibTask.status === "running"}
+									disabled={!poolReady}
 									onClick={runFibonacci}
 									type="button"
 								>
-									{fibTask.status === "running" ? "Running" : "Calculate"}
+									{fibTask.status === "running" ? "Queue another" : "Calculate"}
 								</button>
 							</div>
 							<output className="task-output" aria-live="polite">
