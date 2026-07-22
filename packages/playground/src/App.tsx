@@ -83,6 +83,7 @@ function App() {
 		failed: 0,
 		status: "idle",
 	});
+	const batchGenerationRef = useRef(0);
 	const logSequence = useRef(0);
 	const logListRef = useRef<HTMLOListElement>(null);
 
@@ -145,6 +146,7 @@ function App() {
 		event.preventDefault();
 		const size = Math.max(1, Math.min(16, Math.round(draftSize)));
 		const concurrency = Math.max(1, Math.min(8, Math.round(draftConcurrency)));
+		++batchGenerationRef.current;
 		setDraftSize(size);
 		setDraftConcurrency(concurrency);
 		setStats(null);
@@ -174,6 +176,7 @@ function App() {
 
 	const runBatch = async () => {
 		if (!pool.api) return;
+		const generation = ++batchGenerationRef.current;
 		const taskTotal = Math.max(1, Math.min(40, Math.round(batchCount)));
 		const delayMs = Math.max(0, Math.min(5_000, Math.round(batchDelay)));
 		setBatchCount(taskTotal);
@@ -188,6 +191,7 @@ function App() {
 				Boolean(call),
 		);
 		const settled = await Promise.allSettled(calls);
+		if (batchGenerationRef.current !== generation) return;
 		const completed = settled.filter(
 			(result) => result.status === "fulfilled",
 		).length;
@@ -252,7 +256,11 @@ function App() {
 				<div className="summary-stat">
 					<span className="stat-label">Settled</span>
 					<strong>
-						{(stats?.completedTasks ?? 0) + (stats?.failedTasks ?? 0)}
+						{(stats?.completedTasks ?? 0) +
+							(stats?.failedTasks ?? 0) +
+							(stats?.cancelledTasks ?? 0) +
+							(stats?.timedOutTasks ?? 0) +
+							(stats?.droppedTasks ?? 0)}
 					</strong>
 				</div>
 			</section>

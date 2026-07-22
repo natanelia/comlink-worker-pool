@@ -18,7 +18,7 @@
 		"typecheck": "bun run -F comlink-worker-pool-react -F comlink-worker-pool -F comlink-worker-pool-playground typecheck && bun run browser:typecheck",
 		"build": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
 		"build:watch": "bun run -F comlink-worker-pool-react -F comlink-worker-pool build",
-		"test": "bun run -F comlink-worker-pool-react -F comlink-worker-pool test",
+		"test": "bun run -F comlink-worker-pool-react -F comlink-worker-pool -F comlink-worker-pool-playground test",
 		"test:exports": "node scripts/smoke-package-exports.cjs",
 		"test:packages": "bun run test:exports && publint packages/comlink-worker-pool && publint packages/comlink-worker-pool-react && attw --pack packages/comlink-worker-pool --profile strict && attw --pack packages/comlink-worker-pool-react --profile strict && node scripts/smoke-package-consumer.mjs",
 		"test:browser": "playwright test",

@@ -1,4 +1,6 @@
 import * as Comlink from "comlink";
+import { analyzeText } from "./text-analysis";
+export { analyzeText, type TextAnalysis } from "./text-analysis";
 
 function fibonacci(n: number): number {
 	if (n <= 1) return n;
@@ -14,21 +16,6 @@ export async function fibAsync(n: number): Promise<number> {
 		throw new Error("Fibonacci input must be an integer from 0 to 45");
 	}
 	return fibonacci(n);
-}
-
-export interface TextAnalysis {
-	characters: number;
-	reversed: string;
-	words: number;
-}
-
-export async function analyzeText(text: string): Promise<TextAnalysis> {
-	if (typeof text !== "string") throw new Error("Text input must be a string");
-	return {
-		characters: text.length,
-		reversed: [...text].reverse().join(""),
-		words: text.trim().split(/\s+/).filter(Boolean).length,
-	};
 }
 
 export interface DelayedTaskResult {
