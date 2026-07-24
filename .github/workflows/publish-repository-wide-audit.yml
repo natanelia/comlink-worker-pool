@@ -6,12 +6,16 @@ on:
       - agent/repository-wide-audit-bootstrap
     paths:
       - .github/workflows/publish-repository-wide-audit.yml
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   publish:
+    if: github.event_name == 'push' || github.head_ref == 'agent/repository-wide-audit-bootstrap'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout bootstrap branch
