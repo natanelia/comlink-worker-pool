@@ -1,0 +1,37 @@
+name: Cleanup audit bootstrap branch
+
+on:
+  push:
+    branches:
+      - agent/repository-wide-audit-bootstrap
+    paths:
+      - .github/workflows/cleanup-audit-bootstrap.yml
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Confirm the clean audit pull request exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          number="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --head agent/repository-wide-audit-fixes \
+            --json number \
+            --jq '.[0].number')"
+          test -n "$number"
+
+      - name: Delete the transport-only bootstrap branch
+        shell: bash
+        run: |
+          gh api \
+            --method DELETE \
+            "repos/$GITHUB_REPOSITORY/git/refs/heads/agent/repository-wide-audit-bootstrap"
