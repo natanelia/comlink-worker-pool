@@ -71,7 +71,18 @@ jobs:
           changeset.write_text(text.replace(old_summary, new_summary, 1))
           PY
       - name: Run targeted regression tests
-        run: bun test packages/comlink-worker-pool/src/WorkerPool.regression.test.ts
+        id: targeted-tests
+        shell: bash
+        run: |
+          set -o pipefail
+          bun test packages/comlink-worker-pool/src/WorkerPool.regression.test.ts 2>&1 | tee targeted-test.log
+      - name: Upload targeted test failure
+        if: failure() && steps.targeted-tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr7-targeted-test-log
+          path: targeted-test.log
+          retention-days: 1
       - name: Run full non-browser verification
         run: bun run verify
       - name: Commit reviewed fixes
