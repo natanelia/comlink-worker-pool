@@ -55,13 +55,15 @@ jobs:
       - name: Normalize audited source changes
         shell: bash
         run: |
+          set -o pipefail
           bunx biome check --write --unsafe \
             packages/comlink-worker-pool/src/WorkerPool.ts \
             packages/comlink-worker-pool/src/WorkerPool.regression.test.ts \
             packages/comlink-worker-pool-react/src/useWorkerPool.ts \
             packages/comlink-worker-pool-react/src/useWorkerPool.regression.test.tsx \
             packages/comlink-worker-pool-react/src/useWorkerTask.ts \
-            packages/comlink-worker-pool-react/src/useWorkerTask.regression.test.tsx
+            packages/comlink-worker-pool-react/src/useWorkerTask.regression.test.tsx \
+            2>&1 | tee /tmp/audit-normalize.log
 
       - name: Run the complete non-browser verification suite
         shell: bash
@@ -69,12 +71,12 @@ jobs:
           set -o pipefail
           bun run verify 2>&1 | tee /tmp/audit-verify.log
 
-      - name: Upload verification failure log
+      - name: Upload diagnostic logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: audit-verify-log
-          path: /tmp/audit-verify.log
+          name: audit-diagnostic-log
+          path: /tmp/audit-*.log
           retention-days: 1
 
       - name: Publish one atomic fix commit
