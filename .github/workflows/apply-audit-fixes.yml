@@ -51,9 +51,16 @@ jobs:
       - name: Run the complete non-browser verification suite
         shell: bash
         run: |
-          set -euo pipefail
-          bun install --frozen-lockfile
-          bun run verify
+          set -o pipefail
+          (bun install --frozen-lockfile && bun run verify) 2>&1 | tee /tmp/audit-verify.log
+
+      - name: Upload verification failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-verify-log
+          path: /tmp/audit-verify.log
+          retention-days: 1
 
       - name: Publish one atomic fix commit
         shell: bash
