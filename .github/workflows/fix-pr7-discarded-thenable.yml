@@ -1,18 +1,18 @@
 name: Fix PR 7 discarded thenables
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/fix-audit-findings
-    paths:
-      - .github/workflows/fix-pr7-discarded-thenable.yml
+      - main
+    types:
+      - synchronize
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/fix-audit-findings'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR branch
