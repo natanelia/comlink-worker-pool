@@ -10,6 +10,7 @@ export interface ScheduledTask<TTask, TResult> extends Task<TTask, TResult> {
 	signal?: AbortSignal;
 	abortHandler?: () => void;
 	queueTimeout?: ReturnType<typeof setTimeout>;
+	queueDeadline?: number;
 	timeout?: ReturnType<typeof setTimeout>;
 }
 

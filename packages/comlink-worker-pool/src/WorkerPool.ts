@@ -644,6 +644,7 @@ export class WorkerPool<
 			return;
 		}
 		const deadline = item.enqueuedAt + timeoutMs;
+		item.queueDeadline = deadline;
 		const schedule = () => {
 			if (!this.queue.contains(item)) return;
 			const remaining = deadline - monotonicNow();
@@ -667,6 +668,20 @@ export class WorkerPool<
 		schedule();
 	}
 
+	private _expireQueuedTaskIfNeeded(
+		item: ScheduledTask<TTask, TResult>,
+	): boolean {
+		const deadline = item.queueDeadline;
+		if (deadline === undefined || monotonicNow() < deadline) return false;
+		this._settleTask(
+			item,
+			false,
+			new WorkerQueueTimeoutError(deadline - item.enqueuedAt),
+			"queue-timeout",
+		);
+		return true;
+	}
+
 	private _next(): void {
 		if (this.terminationStarted) return;
 		if (this.scheduling) {
@@ -674,9 +689,11 @@ export class WorkerPool<
 			return;
 		}
 		this.scheduling = true;
+		let retriedWithoutProgress = false;
 
 		try {
 			do {
+				const startedTasksBeforePass = this.startedTasks;
 				this.rescheduleRequested = false;
 				while (this.queue.length > 0 && !this.terminationStarted) {
 					let worker: WorkerMetadata<TProxy, TTask, TResult> | null;
@@ -697,6 +714,15 @@ export class WorkerPool<
 					this._dispatch(worker, item);
 				}
 				this._rejectQueueIfPermanentlyExhausted();
+				if (
+					this.rescheduleRequested &&
+					this.startedTasks === startedTasksBeforePass
+				) {
+					if (retriedWithoutProgress) break;
+					retriedWithoutProgress = true;
+				} else {
+					retriedWithoutProgress = false;
+				}
 			} while (this.rescheduleRequested && !this.terminationStarted);
 		} finally {
 			this.scheduling = false;
@@ -758,6 +784,7 @@ export class WorkerPool<
 			return null;
 		}
 		this._startLifetimeTimer(worker);
+		if (!this._containsWorker(worker)) return null;
 		this._startIdleTimer(worker);
 		return worker;
 	}
@@ -827,8 +854,10 @@ export class WorkerPool<
 		worker: WorkerMetadata<TProxy, TTask, TResult>,
 		item: ScheduledTask<TTask, TResult>,
 	): void {
+		if (this._expireQueuedTaskIfNeeded(item)) return;
 		if (item.queueTimeout !== undefined) clearTimeout(item.queueTimeout);
 		item.queueTimeout = undefined;
+		item.queueDeadline = undefined;
 		this._clearIdleTimer(worker);
 		worker.activeTasks.add(item);
 		worker.taskCount++;
@@ -849,11 +878,19 @@ export class WorkerPool<
 
 		void Promise.resolve()
 			.then(() => {
-				if (!this._containsWorker(worker) || !worker.activeTasks.has(item)) {
+				if (
+					!this._containsWorker(worker) ||
+					!worker.activeTasks.has(item) ||
+					this._expireTaskIfNeeded(worker, item)
+				) {
 					return undefined;
 				}
 				const method = worker.proxy[item.task.method];
-				if (!this._containsWorker(worker) || !worker.activeTasks.has(item)) {
+				if (
+					!this._containsWorker(worker) ||
+					!worker.activeTasks.has(item) ||
+					this._expireTaskIfNeeded(worker, item)
+				) {
 					return undefined;
 				}
 				if (typeof method !== "function") {
@@ -861,7 +898,15 @@ export class WorkerPool<
 						`Worker proxy method ${String(item.task.method)} is not a function`,
 					);
 				}
-				return Reflect.apply(method, worker.proxy, item.task.args);
+				const result = Reflect.apply(method, worker.proxy, item.task.args);
+				if (
+					!this._containsWorker(worker) ||
+					!worker.activeTasks.has(item) ||
+					this._expireTaskIfNeeded(worker, item)
+				) {
+					return undefined;
+				}
+				return result;
 			})
 			.then(
 				(result) => this._completeTask(worker, item, true, result as TResult),
@@ -883,7 +928,9 @@ export class WorkerPool<
 		succeeded: boolean,
 		value: unknown,
 	): void {
-		if (!worker.activeTasks.delete(item)) return;
+		if (!this._containsWorker(worker) || !worker.activeTasks.has(item)) return;
+		if (this._expireTaskIfNeeded(worker, item)) return;
+		worker.activeTasks.delete(item);
 		this._settleTask(item, succeeded, value);
 
 		if (!this._containsWorker(worker) || this.terminationStarted) return;
@@ -943,6 +990,7 @@ export class WorkerPool<
 	): void {
 		if (item.queueTimeout !== undefined) clearTimeout(item.queueTimeout);
 		item.queueTimeout = undefined;
+		item.queueDeadline = undefined;
 		if (!preserveTaskTimer) {
 			if (item.timeout !== undefined) clearTimeout(item.timeout);
 			item.timeout = undefined;
@@ -986,13 +1034,34 @@ export class WorkerPool<
 		});
 	}
 
+	private _expireTaskIfNeeded(
+		worker: WorkerMetadata<TProxy, TTask, TResult>,
+		item: ScheduledTask<TTask, TResult>,
+	): boolean {
+		const timeoutMs = this.taskTimeoutMs;
+		if (
+			timeoutMs === undefined ||
+			item.startedAt === undefined ||
+			monotonicNow() - item.startedAt < timeoutMs
+		) {
+			return false;
+		}
+		this._handleWorkerFailure(
+			worker,
+			new WorkerTaskTimeoutError(timeoutMs),
+			item,
+		);
+		return true;
+	}
+
 	private _startTaskTimer(
 		worker: WorkerMetadata<TProxy, TTask, TResult>,
 		item: ScheduledTask<TTask, TResult>,
 	): void {
 		const timeoutMs = this.taskTimeoutMs;
-		if (timeoutMs === undefined) return;
-		const deadline = monotonicNow() + timeoutMs;
+		const startedAt = item.startedAt;
+		if (timeoutMs === undefined || startedAt === undefined) return;
+		const deadline = startedAt + timeoutMs;
 		const schedule = () => {
 			if (!worker.activeTasks.has(item)) return;
 			const remaining = deadline - monotonicNow();
@@ -1004,16 +1073,9 @@ export class WorkerPool<
 				return;
 			}
 			item.timeout = undefined;
-			this._handleWorkerFailure(
-				worker,
-				new WorkerTaskTimeoutError(timeoutMs),
-				item,
-			);
+			this._expireTaskIfNeeded(worker, item);
 		};
-		item.timeout = setTimeout(
-			schedule,
-			Math.min(timeoutMs, MAX_TIMER_DELAY_MS),
-		);
+		schedule();
 	}
 
 	private _hasExpired(worker: WorkerMetadata<TProxy, TTask, TResult>): boolean {
@@ -1048,10 +1110,7 @@ export class WorkerPool<
 			this._next();
 			this._updateStats();
 		};
-		worker.lifetimeTimer = setTimeout(
-			schedule,
-			Math.min(this.maxWorkerLifetimeMs, MAX_TIMER_DELAY_MS),
-		);
+		schedule();
 	}
 
 	private _startIdleTimer(

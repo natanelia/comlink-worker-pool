@@ -1,0 +1,22 @@
+bun test v1.3.13 (bf2e2cec)
+
+::group::packages/comlink-worker-pool/src/WorkerPool.regression.test.ts:
+(pass) WorkerPool - regression coverage > worker-returned lifecycle errors remain ordinary task rejections [4.00ms]
+(pass) WorkerPool - regression coverage > task-started observers can close without a late proxy invocation
+(pass) WorkerPool - regression coverage > never dispatches a worker removed during worker-created and resumes scheduling [1.00ms]
+(pass) WorkerPool - regression coverage > retires a never-used worker after reentrant task cancellation [1.00ms]
+(pass) WorkerPool - regression coverage > includes synchronous task-queued observer time in queue deadlines [1.00ms]
+(pass) WorkerPool - regression coverage > rechecks queue deadlines after synchronous worker setup [20.00ms]
+(pass) WorkerPool - regression coverage > rechecks task deadlines after synchronous task-started observers [21.00ms]
+(pass) WorkerPool - regression coverage > does not invoke a proxy method after its getter crosses the task deadline [21.00ms]
+(pass) WorkerPool - regression coverage > retires workers whose lifetime expires during worker-created observers [21.00ms]
+(pass) WorkerPool - regression coverage > bounds synchronous retries when worker-created observers keep failing workers [1.00ms]
+(pass) WorkerPool - regression coverage > failure settlement events observe already-decremented running counts
+(pass) WorkerPool - regression coverage > reentrant failure observers cannot dispatch onto the failing worker [1.00ms]
+
+::endgroup::
+
+ 12 pass
+ 0 fail
+ 42 expect() calls
+Ran 12 tests across 1 file. [234.00ms]
