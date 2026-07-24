@@ -24,16 +24,48 @@ jobs:
           ref: agent/repository-wide-audit-bootstrap
           fetch-depth: 0
 
-      - name: Reconstruct and verify final repository tree
+      - name: Diagnose transport integrity
         shell: bash
         run: |
-          set -euo pipefail
-          test "$(find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' | wc -l)" -eq 15
+          set -uo pipefail
+          {
+            printf 'chunk-count '
+            find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' | wc -l
+            for file in $(find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' | sort); do
+              printf '%s bytes=' "$file"
+              wc -c < "$file" | tr -d ' '
+              printf '%s git-blob=' "$file"
+              git hash-object "$file"
+              printf '%s sha256=' "$file"
+              sha256sum "$file" | cut -d' ' -f1
+            done
+          } > transport-diagnostics.txt
+          set +e
           find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' -print0 \
             | sort -z \
             | xargs -0 cat \
             | tr -d '\r\n' \
             | base64 --decode > /tmp/final-tree.tar.xz
+          decode_status=$?
+          set -e
+          printf 'decode-status %s\n' "$decode_status" >> transport-diagnostics.txt
+          printf 'archive-bytes ' >> transport-diagnostics.txt
+          wc -c < /tmp/final-tree.tar.xz | tr -d ' ' >> transport-diagnostics.txt
+          printf 'archive-sha256 ' >> transport-diagnostics.txt
+          sha256sum /tmp/final-tree.tar.xz | cut -d' ' -f1 >> transport-diagnostics.txt
+
+      - name: Upload transport diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-audit-transport-diagnostics
+          path: transport-diagnostics.txt
+          retention-days: 1
+
+      - name: Verify final repository tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' | wc -l)" -eq 15
           echo "6cfec224776814eab72de0fe0968b8b27f1d74a13119e8be0849f69bd66ea720  /tmp/final-tree.tar.xz" \
             | sha256sum --check --strict -
           tar -tJf /tmp/final-tree.tar.xz >/dev/null
