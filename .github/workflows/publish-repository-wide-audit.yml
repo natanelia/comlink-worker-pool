@@ -39,7 +39,7 @@ jobs:
           elif len(data) != 8_000:
               raise SystemExit(f'unexpected chunk-07 length: {len(data)}')
           PY
-          test "$(git hash-object .transport/final-tree.07.b64)" = af34eac93522e108ab64f20864d2ae9d2068d0b5
+          test "$(git hash-object .transport/final-tree.07.b64)" = af3438472fe735c899c29faf7b1a84d50357cb7a
           find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' -print0 \
             | sort -z \
             | xargs -0 cat \
