@@ -1,0 +1,56 @@
+name: Finalize repository-wide audit
+
+on:
+  push:
+    branches:
+      - agent/repository-wide-audit-bootstrap
+    paths:
+      - .github/workflows/finalize-repository-wide-audit.yml
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Resolve the clean audit pull request
+        id: pr
+        shell: bash
+        run: |
+          set -euo pipefail
+          number="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --head agent/repository-wide-audit-fixes \
+            --json number \
+            --jq '.[0].number')"
+          test -n "$number"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the complete clean-PR check suite
+        shell: bash
+        run: |
+          gh pr checks "${{ steps.pr.outputs.number }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --watch \
+            --interval 10 \
+            --fail-fast
+
+      - name: Record successful validation
+        shell: bash
+        run: |
+          gh pr comment "${{ steps.pr.outputs.number }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --body $'Repository-wide validation completed successfully.\n\nThe pull-request check suite passed, including linting, TypeScript, version preview, unit tests, package builds and budgets, packed-package consumer checks, and the real-browser worker matrix.'
+
+      - name: Close the transport-only bootstrap pull request
+        shell: bash
+        run: |
+          gh pr close 8 \
+            --repo "$GITHUB_REPOSITORY" \
+            --comment "The checksum-verified clean audit branch and pull request have been published; this transport-only bootstrap PR is no longer needed."
