@@ -1,0 +1,84 @@
+name: Apply audited worker-pool fixes
+
+on:
+  push:
+    branches:
+      - agent/apply-audit-fixes-helper
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout helper commit
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct and apply the audited patch
+        shell: bash
+        env:
+          BASE_COMMIT: 2836658103c0c859239d7f87726280aeb9ca683c
+          PATCH_SHA256: 8ba1f8bbce1e85d419dff10aac59e8b76677e45c161ece593e2c7075d364312c
+          TARGET_BRANCH: agent/fix-audit-findings
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          parts=(.github/audit-patch-parts/part-*.b64)
+          test "${#parts[@]}" -eq 24
+          : > /tmp/comlink-worker-pool-audit-fixes.patch
+          for part in "${parts[@]}"; do
+            base64 --decode "$part" >> /tmp/comlink-worker-pool-audit-fixes.patch
+          done
+          test "$(sha256sum /tmp/comlink-worker-pool-audit-fixes.patch | cut -d' ' -f1)" = "$PATCH_SHA256"
+          git fetch origin "refs/heads/$TARGET_BRANCH:refs/remotes/origin/$TARGET_BRANCH"
+          test "$(git rev-parse "refs/remotes/origin/$TARGET_BRANCH^{commit}")" = "$BASE_COMMIT"
+          git reset --hard "$BASE_COMMIT"
+          git apply --check /tmp/comlink-worker-pool-audit-fixes.patch
+          git apply /tmp/comlink-worker-pool-audit-fixes.patch
+          git diff --check
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: Run the complete non-browser verification suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bun run verify
+
+      - name: Publish one atomic fix commit
+        shell: bash
+        env:
+          BASE_COMMIT: 2836658103c0c859239d7f87726280aeb9ca683c
+          TARGET_BRANCH: agent/fix-audit-findings
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          cat > /tmp/expected-files <<'FILES'
+          .changeset/bright-workers-rest.md
+          packages/comlink-worker-pool-react/src/useWorkerPool.regression.test.tsx
+          packages/comlink-worker-pool-react/src/useWorkerPool.ts
+          packages/comlink-worker-pool-react/src/useWorkerTask.regression.test.tsx
+          packages/comlink-worker-pool-react/src/useWorkerTask.ts
+          packages/comlink-worker-pool/src/WorkerPool.regression.test.ts
+          packages/comlink-worker-pool/src/WorkerPool.ts
+          scripts/smoke-package-consumer.mjs
+          FILES
+          git diff --cached --name-only | sort > /tmp/actual-files
+          diff -u /tmp/expected-files /tmp/actual-files
+          git diff --cached --check
+          git commit -m "Fix worker-pool reentrancy and React binding bugs"
+          test "$(git rev-parse HEAD^)" = "$BASE_COMMIT"
+          git fetch origin "refs/heads/$TARGET_BRANCH:refs/remotes/origin/$TARGET_BRANCH"
+          test "$(git rev-parse "refs/remotes/origin/$TARGET_BRANCH^{commit}")" = "$BASE_COMMIT"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git push origin --delete agent/apply-audit-fixes-helper
