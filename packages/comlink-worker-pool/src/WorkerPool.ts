@@ -36,6 +36,11 @@ export type WorkerFactory = () => Worker;
 // biome-ignore lint/suspicious/noConfusingVoidType: sync terminators naturally return void.
 export type WorkerTerminator = (worker: Worker) => void | PromiseLike<unknown>;
 
+type CallableProxy<TProxy> = {
+	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
+	[K in keyof TProxy]: (...args: any[]) => unknown;
+};
+
 /** Policy applied when a submitted task would exceed maxQueueSize. */
 export type QueueOverflowPolicy = "reject" | "drop-oldest";
 
@@ -186,10 +191,7 @@ export interface Task<TTask, TResult> {
 }
 
 /** Options for creating a WorkerPool. */
-export interface WorkerPoolOptions<
-	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
-	TProxy extends Record<string, (...args: any[]) => unknown>,
-> {
+export interface WorkerPoolOptions<TProxy extends CallableProxy<TProxy>> {
 	/** Maximum number of scheduler-managed, non-quarantined workers. */
 	size: number;
 	/** Optional callback for pool statistics. Observer errors do not break the pool. */
@@ -243,8 +245,7 @@ export interface WorkerPoolOptions<
 
 /** A lazy, bounded pool for proxying calls to Web Workers. */
 export class WorkerPool<
-	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
-	TProxy extends Record<string, (...args: any[]) => unknown>,
+	TProxy extends CallableProxy<TProxy>,
 	TTask extends { method: keyof TProxy; args: unknown[] } = {
 		method: keyof TProxy;
 		args: unknown[];
@@ -277,6 +278,7 @@ export class WorkerPool<
 	private drainRequested = false;
 	private terminationStarted = false;
 	private scheduling = false;
+	private rescheduleRequested = false;
 	private shutdownResolved = false;
 	private submittedTasks = 0;
 	private startedTasks = 0;
@@ -458,11 +460,12 @@ export class WorkerPool<
 		const reason = new WorkerPoolTerminatedError();
 
 		for (const item of this.queue.drain()) {
-			this._settleTask(item, false, reason);
+			this._settleTask(item, false, reason, "pool-closed");
 		}
 		for (const worker of [...this.workers]) {
 			for (const item of [...worker.activeTasks]) {
-				this._settleTask(item, false, reason);
+				worker.activeTasks.delete(item);
+				this._settleTask(item, false, reason, "pool-closed");
 			}
 			worker.activeTasks.clear();
 			this._removeWorker(worker, true, "shutdown");
@@ -612,6 +615,7 @@ export class WorkerPool<
 				rejected,
 				false,
 				new WorkerPoolQueueFullError(this.maxQueueSize, dropped),
+				dropped ? "dropped" : "queue-rejected",
 			);
 		}
 	}
@@ -626,6 +630,7 @@ export class WorkerPool<
 			item,
 			false,
 			new WorkerTaskAbortedError(item.signal?.reason),
+			"aborted",
 			isRunning,
 		);
 		this._updateStats();
@@ -638,7 +643,7 @@ export class WorkerPool<
 		if (timeoutMs === undefined || item.settled || !this.queue.contains(item)) {
 			return;
 		}
-		const deadline = monotonicNow() + timeoutMs;
+		const deadline = item.enqueuedAt + timeoutMs;
 		const schedule = () => {
 			if (!this.queue.contains(item)) return;
 			const remaining = deadline - monotonicNow();
@@ -651,39 +656,48 @@ export class WorkerPool<
 			}
 			item.queueTimeout = undefined;
 			this.queue.remove(item);
-			this._settleTask(item, false, new WorkerQueueTimeoutError(timeoutMs));
+			this._settleTask(
+				item,
+				false,
+				new WorkerQueueTimeoutError(timeoutMs),
+				"queue-timeout",
+			);
 			this._updateStats();
 		};
-		item.queueTimeout = setTimeout(
-			schedule,
-			Math.min(timeoutMs, MAX_TIMER_DELAY_MS),
-		);
+		schedule();
 	}
 
 	private _next(): void {
-		if (this.scheduling || this.terminationStarted) return;
+		if (this.terminationStarted) return;
+		if (this.scheduling) {
+			this.rescheduleRequested = true;
+			return;
+		}
 		this.scheduling = true;
 
 		try {
-			while (this.queue.length > 0 && !this.terminationStarted) {
-				let worker: WorkerMetadata<TProxy, TTask, TResult> | null;
-				try {
-					worker = this._getAvailableWorker();
-				} catch (error) {
-					// A broken factory affects the current backlog, but later submissions
-					// may retry after the client fixes a transient resource problem.
-					for (const item of this.queue.drain()) {
-						this._settleTask(item, false, error);
+			do {
+				this.rescheduleRequested = false;
+				while (this.queue.length > 0 && !this.terminationStarted) {
+					let worker: WorkerMetadata<TProxy, TTask, TResult> | null;
+					try {
+						worker = this._getAvailableWorker();
+					} catch (error) {
+						// A broken factory affects the current backlog, but later submissions
+						// may retry after the client fixes a transient resource problem.
+						for (const item of this.queue.drain()) {
+							this._settleTask(item, false, error);
+						}
+						break;
 					}
-					break;
-				}
-				if (!worker) break;
+					if (!worker) break;
 
-				const item = this.queue.shift();
-				if (!item) break;
-				this._dispatch(worker, item);
-			}
-			this._rejectQueueIfPermanentlyExhausted();
+					const item = this.queue.shift();
+					if (!item) break;
+					this._dispatch(worker, item);
+				}
+				this._rejectQueueIfPermanentlyExhausted();
+			} while (this.rescheduleRequested && !this.terminationStarted);
 		} finally {
 			this.scheduling = false;
 		}
@@ -738,11 +752,13 @@ export class WorkerPool<
 			timestamp: Date.now(),
 			workerId: worker.id,
 		});
+		if (!this._containsWorker(worker)) return null;
 		if (this.terminationStarted) {
 			this._removeWorker(worker, true, "shutdown");
 			return null;
 		}
 		this._startLifetimeTimer(worker);
+		this._startIdleTimer(worker);
 		return worker;
 	}
 
@@ -833,7 +849,13 @@ export class WorkerPool<
 
 		void Promise.resolve()
 			.then(() => {
+				if (!this._containsWorker(worker) || !worker.activeTasks.has(item)) {
+					return undefined;
+				}
 				const method = worker.proxy[item.task.method];
+				if (!this._containsWorker(worker) || !worker.activeTasks.has(item)) {
+					return undefined;
+				}
 				if (typeof method !== "function") {
 					throw new TypeError(
 						`Worker proxy method ${String(item.task.method)} is not a function`,
@@ -886,12 +908,21 @@ export class WorkerPool<
 		triggeringTask?: ScheduledTask<TTask, TResult>,
 	): void {
 		if (!this._containsWorker(worker)) return;
+		worker.markedForTermination = true;
 		for (const item of [...worker.activeTasks]) {
+			worker.activeTasks.delete(item);
 			const taskReason =
 				triggeringTask !== undefined && item !== triggeringTask
 					? new WorkerCrashedError(worker.id, reason)
 					: reason;
-			this._settleTask(item, false, taskReason);
+			this._settleTask(
+				item,
+				false,
+				taskReason,
+				triggeringTask === item && reason instanceof WorkerTaskTimeoutError
+					? "task-timeout"
+					: "worker-failure",
+			);
 		}
 		worker.activeTasks.clear();
 		this._removeWorker(
@@ -907,6 +938,7 @@ export class WorkerPool<
 		item: ScheduledTask<TTask, TResult>,
 		succeeded: boolean,
 		value: unknown,
+		outcome: WorkerPoolTaskOutcome = succeeded ? "fulfilled" : "rejected",
 		preserveTaskTimer = false,
 	): void {
 		if (item.queueTimeout !== undefined) clearTimeout(item.queueTimeout);
@@ -921,7 +953,6 @@ export class WorkerPool<
 		}
 		if (item.settled) return;
 		item.settled = true;
-		const outcome = this._classifyTaskOutcome(succeeded, value);
 		switch (outcome) {
 			case "fulfilled":
 				this.completedTasks++;
@@ -953,22 +984,6 @@ export class WorkerPool<
 				monotonicNow() - (item.startedAt ?? item.enqueuedAt),
 			),
 		});
-	}
-
-	private _classifyTaskOutcome(
-		succeeded: boolean,
-		value: unknown,
-	): WorkerPoolTaskOutcome {
-		if (succeeded) return "fulfilled";
-		if (value instanceof WorkerTaskAbortedError) return "aborted";
-		if (value instanceof WorkerQueueTimeoutError) return "queue-timeout";
-		if (value instanceof WorkerTaskTimeoutError) return "task-timeout";
-		if (value instanceof WorkerPoolQueueFullError) {
-			return value.dropped ? "dropped" : "queue-rejected";
-		}
-		if (value instanceof WorkerCrashedError) return "worker-failure";
-		if (value instanceof WorkerPoolTerminatedError) return "pool-closed";
-		return "rejected";
 	}
 
 	private _startTaskTimer(

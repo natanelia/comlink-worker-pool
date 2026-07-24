@@ -64,7 +64,7 @@ try {
 	);
 	writeFileSync(
 		join(temporaryDirectory, "consumer.ts"),
-		'import { WorkerPool, type WorkerPoolShutdownReport } from "comlink-worker-pool";\nimport { useWorkerPool, useWorkerTask } from "comlink-worker-pool-react";\ntype Api = { add(a: number, b: number): Promise<number> };\ndeclare const workerFactory: () => Worker;\ndeclare const proxyFactory: (worker: Worker) => Api;\nconst pool = new WorkerPool<Api>({ size: 1, workerFactory, proxyFactory, maxQueueSize: 2 });\nconst result: Promise<number> = pool.run("add", [1, 2], { priority: 1 });\nconst shutdown: Promise<WorkerPoolShutdownReport> = pool.drain();\nconst hook = useWorkerPool<Api>({ workerFactory, proxyFactory, poolSize: 1 });\nconst task = useWorkerTask(hook.api, "add");\nconst taskResult: number | null = task.result;\nvoid result;\nvoid shutdown;\nvoid taskResult;\n',
+		'import { WorkerPool, type WorkerPoolShutdownReport } from "comlink-worker-pool";\nimport { useWorkerPool, useWorkerTask } from "comlink-worker-pool-react";\ninterface Api { add(a: number, b: number): Promise<number> }\ndeclare const workerFactory: () => Worker;\ndeclare const proxyFactory: (worker: Worker) => Api;\nconst pool = new WorkerPool<Api>({ size: 1, workerFactory, proxyFactory, maxQueueSize: 2 });\nconst result: Promise<number> = pool.run("add", [1, 2], { priority: 1 });\nconst shutdown: Promise<WorkerPoolShutdownReport> = pool.drain();\nconst hook = useWorkerPool<Api>({ workerFactory, proxyFactory, poolSize: 1 });\nconst task = useWorkerTask(hook.api, "add");\nconst taskResult: number | null = task.result;\nvoid result;\nvoid shutdown;\nvoid taskResult;\n',
 	);
 	writeFileSync(
 		join(temporaryDirectory, "tsconfig.json"),
