@@ -1,17 +1,18 @@
 name: Run PR 7 review fixer
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/fix-audit-findings
-    paths:
-      - .github/workflows/kick-pr7-review-fixes.yml
+      - main
+    types:
+      - synchronize
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/fix-audit-findings'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR branch
@@ -29,7 +30,14 @@ jobs:
         shell: bash
         run: |
           python3 <<'PY'
+          import subprocess
           from pathlib import Path
+
+          subprocess.run(["git", "fetch", "origin", "main"], check=True)
+          subprocess.run(
+              ["git", "checkout", "origin/main", "--", "package.json"],
+              check=True,
+          )
 
           workflow = Path(".github/workflows/apply-pr7-review-fixes.yml")
           lines = workflow.read_text().splitlines()
@@ -42,7 +50,25 @@ jobs:
               for line in lines[start:end]
           )
           exec(compile(code, str(workflow), "exec"), {})
+
           Path(".github/workflows/kick-pr7-review-fixes.yml").unlink()
+          Path("scripts/emit-pr7-review-fixes.py").unlink(missing_ok=True)
+
+          changeset = Path(".changeset/bright-workers-rest.md")
+          old_summary = (
+              "Fix scheduler reentrancy, task outcome accounting, queue deadlines, "
+              "React binding isolation, callable state values, and interface-based "
+              "API typings."
+          )
+          new_summary = (
+              "Fix scheduler reentrancy, task outcome accounting, queue deadlines "
+              "under blocked event loops, bounded no-progress retries, React binding "
+              "isolation, callable state values, and interface-based API typings."
+          )
+          text = changeset.read_text()
+          if text.count(old_summary) != 1:
+              raise RuntimeError("Unexpected Changeset summary")
+          changeset.write_text(text.replace(old_summary, new_summary, 1))
           PY
       - name: Run targeted regression tests
         run: bun test packages/comlink-worker-pool/src/WorkerPool.regression.test.ts
