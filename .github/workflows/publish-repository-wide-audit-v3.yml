@@ -1,0 +1,124 @@
+name: Publish repository-wide audit v3
+
+on:
+  push:
+    branches:
+      - agent/repository-wide-audit-bootstrap
+    paths:
+      - .github/workflows/publish-repository-wide-audit-v3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bootstrap branch
+        uses: actions/checkout@v6
+        with:
+          ref: agent/repository-wide-audit-bootstrap
+          fetch-depth: 0
+
+      - name: Reconstruct and verify final repository tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' | wc -l)" -eq 15
+          python3 <<'PY'
+          from pathlib import Path
+          path = Path('.transport/final-tree.07.b64')
+          data = path.read_bytes()
+          if len(data) == 8_001 and data.endswith(b'Y'):
+              path.write_bytes(data[:-1])
+          elif len(data) != 8_000:
+              raise SystemExit(f'unexpected chunk-07 length: {len(data)}')
+          PY
+          test "$(git hash-object .transport/final-tree.07.b64)" = af3438472fe735c899c29faf7b1a84d50357cb7a
+          find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' -print0 \
+            | sort -z \
+            | xargs -0 cat \
+            | tr -d '\r\n' \
+            | base64 --decode > /tmp/final-tree.tar.xz
+          echo "6cfec224776814eab72de0fe0968b8b27f1d74a13119e8be0849f69bd66ea720  /tmp/final-tree.tar.xz" \
+            | sha256sum --check --strict -
+          tar -tJf /tmp/final-tree.tar.xz >/dev/null
+
+      - name: Materialize clean branch from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --prune origin main
+          git checkout -f -B agent/repository-wide-audit-fixes origin/main
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          tar -xJf /tmp/final-tree.tar.xz
+
+      - name: Correct dependency versions
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          replacements = {
+              Path('package.json'): {
+                  '"tmp": "^0.2.6"': '"tmp": "^0.2.4"',
+                  '"valibot": "^1.2.0"': '"valibot": "^1.1.0"',
+              },
+              Path('packages/comlink-worker-pool-react/package.json'): {
+                  '"@happy-dom/global-registrator": "^20.8.9"': '"@happy-dom/global-registrator": "^20.8.8"',
+              },
+          }
+          for path, changes in replacements.items():
+              text = path.read_text()
+              for old, new in changes.items():
+                  if text.count(old) != 1:
+                      raise SystemExit(f'expected exactly one replacement in {path}: {old}')
+                  text = text.replace(old, new, 1)
+              path.write_text(text)
+          PY
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: Refresh dependency lockfile
+        run: bun update
+
+      - name: Apply formatting and safe lint fixes
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run lint:fix 2>&1 | tee lint-fix.log
+
+      - name: Upload corrective lint diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-audit-lint-fix-log
+          path: lint-fix.log
+          retention-days: 1
+
+      - name: Run full non-browser verification
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run verify 2>&1 | tee verify.log
+
+      - name: Upload verification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-audit-verify-log
+          path: verify.log
+          retention-days: 1
+
+      - name: Commit and publish clean audit branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Audit and harden the full repository"
+          git push --force-with-lease origin HEAD:refs/heads/agent/repository-wide-audit-fixes
