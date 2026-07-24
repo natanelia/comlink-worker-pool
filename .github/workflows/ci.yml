@@ -31,6 +31,50 @@ jobs:
             repository-audit-files.txt
           retention-days: 1
 
+  deep-audit:
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/fix-audit-findings'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Run repository analysis tools
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p audit-reports
+          run_audit() {
+            local name="$1"
+            shift
+            set +e
+            "$@" >"audit-reports/${name}.stdout.txt" 2>"audit-reports/${name}.stderr.txt"
+            local status=$?
+            set -e
+            printf '%s\n' "$status" >"audit-reports/${name}.status.txt"
+          }
+          set -e
+          run_audit knip bunx knip --reporter json
+          run_audit oxlint bunx oxlint --format json .
+          run_audit coverage bun test --coverage
+          run_audit audit bun audit --json
+          run_audit outdated bun outdated --json
+          run_audit duplicates bunx jscpd --min-lines 8 --min-tokens 60 --reporters json,console --output audit-reports/jscpd .
+          run_audit sherif bunx sherif
+          find audit-reports -maxdepth 3 -type f -print -exec wc -c {} \; > audit-reports/manifest.txt
+      - name: Upload repository audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-deep-audit-reports
+          path: audit-reports
+          retention-days: 1
+
   lint:
     runs-on: ubuntu-latest
     steps:
