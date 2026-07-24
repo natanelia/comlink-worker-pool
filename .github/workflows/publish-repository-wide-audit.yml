@@ -58,7 +58,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: repository-audit-transport-diagnostics
-          path: transport-diagnostics.txt
+          path: |
+            transport-diagnostics.txt
+            .transport/final-tree.07.b64
           retention-days: 1
 
       - name: Verify final repository tree
