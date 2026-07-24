@@ -56,14 +56,35 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          bunx biome check --write --unsafe \
-            packages/comlink-worker-pool/src/WorkerPool.ts \
-            packages/comlink-worker-pool/src/WorkerPool.regression.test.ts \
-            packages/comlink-worker-pool-react/src/useWorkerPool.ts \
-            packages/comlink-worker-pool-react/src/useWorkerPool.regression.test.tsx \
-            packages/comlink-worker-pool-react/src/useWorkerTask.ts \
-            packages/comlink-worker-pool-react/src/useWorkerTask.regression.test.tsx \
-            2>&1 | tee /tmp/audit-normalize.log
+          files=(
+            packages/comlink-worker-pool/src/WorkerPool.ts
+            packages/comlink-worker-pool/src/WorkerPool.regression.test.ts
+            packages/comlink-worker-pool-react/src/useWorkerPool.ts
+            packages/comlink-worker-pool-react/src/useWorkerPool.regression.test.tsx
+            packages/comlink-worker-pool-react/src/useWorkerTask.ts
+            packages/comlink-worker-pool-react/src/useWorkerTask.regression.test.tsx
+          )
+          bunx biome check --write --unsafe "${files[@]}" 2>&1 | tee /tmp/audit-normalize.log || true
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("packages/comlink-worker-pool/src/WorkerPool.regression.test.ts")
+          text = path.read_text()
+          replacements = {
+              "\t\tlet pool!: WorkerPool<{ run(): Promise<string> }>;\n\t\tpool = new WorkerPool({":
+                  "\t\tconst pool = new WorkerPool<{ run(): Promise<string> }>({",
+              "\t\tlet pool!: WorkerPool<{ run(): Promise<void> }>;\n\t\tpool = new WorkerPool({":
+                  "\t\tconst pool = new WorkerPool<{ run(): Promise<void> }>({",
+              "\t\tlet pool!: WorkerPool<{ run(value: string): Promise<string> }>;\n\t\tpool = new WorkerPool({":
+                  "\t\tconst pool = new WorkerPool<{ run(value: string): Promise<string> }>({",
+          }
+          for before, after in replacements.items():
+              if text.count(before) != 1:
+                  raise SystemExit(f"expected one exact regression binding: {before!r}")
+              text = text.replace(before, after)
+          path.write_text(text)
+          PY
+          bunx biome check --write --unsafe "${files[@]}" 2>&1 | tee -a /tmp/audit-normalize.log
 
       - name: Run the complete non-browser verification suite
         shell: bash
