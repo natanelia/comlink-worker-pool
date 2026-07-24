@@ -44,6 +44,7 @@ regression_test = """
 \t\tconst rejection = new Error("discarded rejection");
 \t\tlet thenCalls = 0;
 \t\tconst thenable = {
+\t\t\t// biome-ignore lint/suspicious/noThenProperty: deliberately adversarial thenable regression.
 \t\t\tthen: (
 \t\t\t\t_resolve: (value: string) => void,
 \t\t\t\treject: (reason: unknown) => void,
