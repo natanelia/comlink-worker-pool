@@ -48,11 +48,26 @@ jobs:
         with:
           bun-version: 1.3.13
 
+      - name: Install dependencies
+        shell: bash
+        run: bun install --frozen-lockfile
+
+      - name: Normalize audited source changes
+        shell: bash
+        run: |
+          bunx biome check --write --unsafe \
+            packages/comlink-worker-pool/src/WorkerPool.ts \
+            packages/comlink-worker-pool/src/WorkerPool.regression.test.ts \
+            packages/comlink-worker-pool-react/src/useWorkerPool.ts \
+            packages/comlink-worker-pool-react/src/useWorkerPool.regression.test.tsx \
+            packages/comlink-worker-pool-react/src/useWorkerTask.ts \
+            packages/comlink-worker-pool-react/src/useWorkerTask.regression.test.tsx
+
       - name: Run the complete non-browser verification suite
         shell: bash
         run: |
           set -o pipefail
-          (bun install --frozen-lockfile && bun run verify) 2>&1 | tee /tmp/audit-verify.log
+          bun run verify 2>&1 | tee /tmp/audit-verify.log
 
       - name: Upload verification failure log
         if: failure()
