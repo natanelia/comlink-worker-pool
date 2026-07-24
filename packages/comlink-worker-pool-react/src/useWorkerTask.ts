@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ProxyDefault } from "./useWorkerPool";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+type CallableProxy<TProxy> = {
+	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
+	[K in keyof TProxy]: (...args: any[]) => unknown;
+};
 
 type MethodOf<TProxy, K extends keyof TProxy> = TProxy[K] extends (
 	...args: infer TArgs
@@ -9,13 +13,13 @@ type MethodOf<TProxy, K extends keyof TProxy> = TProxy[K] extends (
 
 /** Result type inferred from a selected worker method. */
 export type WorkerTaskResult<
-	TProxy extends ProxyDefault,
+	TProxy extends CallableProxy<TProxy>,
 	K extends keyof TProxy,
 > = Awaited<ReturnType<MethodOf<TProxy, K>>>;
 
 /** State returned by useWorkerTask for one method-bound task. */
 export interface UseWorkerTaskResult<
-	TProxy extends ProxyDefault,
+	TProxy extends CallableProxy<TProxy>,
 	K extends keyof TProxy,
 > {
 	status: "idle" | "running" | "error" | "completed";
@@ -32,7 +36,7 @@ export interface UseWorkerTaskResult<
  * Overlapping calls retain the state of the latest-started invocation.
  */
 export function useWorkerTask<
-	TProxy extends ProxyDefault,
+	TProxy extends CallableProxy<TProxy>,
 	K extends keyof TProxy,
 >(api: TProxy | null, method: K): UseWorkerTaskResult<TProxy, K> {
 	const [status, setStatus] = useState<
@@ -43,58 +47,73 @@ export function useWorkerTask<
 	);
 	const [error, setError] = useState<unknown>(null);
 	const latestCallIdRef = useRef(0);
+	const binding = useMemo(() => ({ api, method }), [api, method]);
+	const activeBindingRef = useRef<object | null>(null);
 
 	const reset = useCallback(() => {
+		if (activeBindingRef.current !== binding) return;
 		++latestCallIdRef.current;
 		setStatus("idle");
 		setResult(null);
 		setError(null);
-	}, []);
+	}, [binding]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: a new API or method is a new task binding and must reset stale state.
 	useEffect(() => {
+		activeBindingRef.current = binding;
 		reset();
 		return () => {
+			if (activeBindingRef.current !== binding) return;
+			activeBindingRef.current = null;
 			++latestCallIdRef.current;
 		};
-	}, [api, method, reset]);
+	}, [binding, reset]);
 
 	const run = useCallback(
 		async (
 			...args: Parameters<MethodOf<TProxy, K>>
 		): Promise<WorkerTaskResult<TProxy, K>> => {
-			const callId = ++latestCallIdRef.current;
-			const isCurrent = () => latestCallIdRef.current === callId;
-			setStatus("running");
-			setResult(null);
-			setError(null);
+			const bindingIsCurrent = () => activeBindingRef.current === binding;
+			const callId = bindingIsCurrent() ? ++latestCallIdRef.current : undefined;
+			const isCurrent = () =>
+				callId !== undefined &&
+				bindingIsCurrent() &&
+				latestCallIdRef.current === callId;
+			if (isCurrent()) {
+				setStatus("running");
+				setResult(null);
+				setError(null);
+			}
 
 			if (!api) {
 				const notReady = new Error("Worker pool is not ready");
 				if (isCurrent()) {
 					setStatus("error");
-					setError(notReady);
+					setError(() => notReady);
 				}
 				throw notReady;
 			}
 
 			try {
 				const task = api[method] as unknown as MethodOf<TProxy, K>;
-				const value = (await task(...args)) as WorkerTaskResult<TProxy, K>;
+				const value = (await Reflect.apply(
+					task,
+					api,
+					args,
+				)) as WorkerTaskResult<TProxy, K>;
 				if (isCurrent()) {
 					setStatus("completed");
-					setResult(value);
+					setResult(() => value);
 				}
 				return value;
 			} catch (taskError) {
 				if (isCurrent()) {
 					setStatus("error");
-					setError(taskError);
+					setError(() => taskError);
 				}
 				throw taskError;
 			}
 		},
-		[api, method],
+		[api, binding, method],
 	);
 
 	return { status, result, error, run, reset };
