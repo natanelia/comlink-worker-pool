@@ -21,6 +21,15 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Lint all workspaces
         run: bun run lint
+      - name: Upload verified review files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr7-final-reviewed-files
+          path: |
+            packages/comlink-worker-pool/src/WorkerPool.ts
+            packages/comlink-worker-pool/src/WorkerPool.regression.test.ts
+          retention-days: 1
 
   typecheck:
     runs-on: ubuntu-latest
