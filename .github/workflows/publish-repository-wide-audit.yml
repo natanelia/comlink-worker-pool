@@ -1,0 +1,71 @@
+name: Publish repository-wide audit
+
+on:
+  push:
+    branches:
+      - agent/repository-wide-audit-bootstrap
+    paths:
+      - .github/workflows/publish-repository-wide-audit.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bootstrap branch
+        uses: actions/checkout@v6
+        with:
+          ref: agent/repository-wide-audit-bootstrap
+          fetch-depth: 0
+
+      - name: Reconstruct and verify final repository tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' | wc -l)" -eq 15
+          find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' -print0 \
+            | sort -z \
+            | xargs -0 cat \
+            | tr -d '\r\n' \
+            | base64 --decode > /tmp/final-tree.tar.xz
+          echo "6cfec224776814eab72de0fe0968b8b27f1d74a13119e8be0849f69bd66ea720  /tmp/final-tree.tar.xz" \
+            | sha256sum --check --strict -
+          tar -tJf /tmp/final-tree.tar.xz >/dev/null
+
+      - name: Materialize clean branch from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --prune origin main
+          git checkout -B agent/repository-wide-audit-fixes origin/main
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          tar -xJf /tmp/final-tree.tar.xz
+          test ! -e .transport
+          test ! -e .github/workflows/publish-repository-wide-audit.yml
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: Refresh dependency lockfile
+        run: bun update
+
+      - name: Format repository
+        run: bun run format
+
+      - name: Run full non-browser verification
+        run: bun run verify
+
+      - name: Commit and publish clean audit branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Audit and harden the full repository"
+          git push origin HEAD:refs/heads/agent/repository-wide-audit-fixes
