@@ -1,0 +1,35 @@
+name: Export repository audit snapshot
+
+on:
+  push:
+    branches:
+      - agent/fix-audit-findings
+    paths:
+      - .github/workflows/export-repository-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: agent/fix-audit-findings
+          fetch-depth: 0
+      - name: Create tracked-file snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files -z | tar --null --files-from=- -czf repository-audit-snapshot.tar.gz
+          git ls-files > repository-audit-files.txt
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-audit-snapshot
+          path: |
+            repository-audit-snapshot.tar.gz
+            repository-audit-files.txt
+          retention-days: 1
