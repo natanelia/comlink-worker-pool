@@ -7,50 +7,7 @@ on:
     branches: ["*"]
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  finalize-review:
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/fix-audit-findings'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v6
-        with:
-          ref: agent/fix-audit-findings
-          fetch-depth: 0
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.13
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Apply the verified source and regression changes
-        run: python3 scripts/emit-final-review-files.py
-      - name: Remove temporary review machinery
-        shell: bash
-        run: |
-          git fetch --prune origin main agent/fix-audit-findings
-          git checkout origin/main -- package.json .github/workflows/ci.yml
-          rm -f \
-            .github/workflows/apply-pr7-review-fixes.yml \
-            .github/workflows/fix-pr7-discarded-thenable.yml \
-            .github/workflows/kick-pr7-review-fixes.yml \
-            scripts/emit-final-review-files.py \
-            scripts/emit-pr7-review-fixes.py
-      - name: Run full non-browser verification
-        run: bun run verify
-      - name: Commit the reviewed fixes
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "Consume discarded worker thenables"
-          git push origin HEAD:agent/fix-audit-findings
-
   lint:
     runs-on: ubuntu-latest
     steps:
