@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --prune origin main
-          git checkout -B agent/repository-wide-audit-fixes origin/main
+          git checkout -f -B agent/repository-wide-audit-fixes origin/main
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           tar -xJf /tmp/final-tree.tar.xz
           test ! -e .transport
