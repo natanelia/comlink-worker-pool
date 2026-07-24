@@ -1,5 +1,6 @@
 name: Run PR 7 review fixer
 
+# Reuses the registered temporary review workflow path.
 on:
   pull_request:
     branches:
