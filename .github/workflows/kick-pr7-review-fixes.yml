@@ -49,6 +49,10 @@ jobs:
               line[10:] if line.startswith("          ") else line
               for line in lines[start:end]
           )
+          raw_marker = "reviewed_tests = r'''"
+          if code.count(raw_marker) != 1:
+              raise RuntimeError("Unexpected reviewed test template")
+          code = code.replace(raw_marker, "reviewed_tests = '''", 1)
           exec(compile(code, str(workflow), "exec"), {})
 
           Path(".github/workflows/kick-pr7-review-fixes.yml").unlink()
