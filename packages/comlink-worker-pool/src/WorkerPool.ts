@@ -904,6 +904,7 @@ export class WorkerPool<
 					!worker.activeTasks.has(item) ||
 					this._expireTaskIfNeeded(worker, item)
 				) {
+					isolateAsyncFailure(result);
 					return undefined;
 				}
 				return result;

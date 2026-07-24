@@ -342,6 +342,40 @@ describe("WorkerPool - regression coverage", () => {
 		await pool.close();
 	});
 
+	test("consumes thenables discarded after synchronous worker failure", async () => {
+		const worker = new RegressionWorker();
+		const rejection = new Error("discarded rejection");
+		let thenCalls = 0;
+		const thenable = {
+			// biome-ignore lint/suspicious/noThenProperty: deliberately adversarial thenable regression.
+			then: (
+				_resolve: (value: string) => void,
+				reject: (reason: unknown) => void,
+			) => {
+				thenCalls++;
+				reject(rejection);
+			},
+		} as unknown as PromiseLike<string>;
+		const pool = new WorkerPool<{ run(): PromiseLike<string> }>({
+			size: 1,
+			taskTimeoutMs: false,
+			workerFactory: () => asWorker(worker),
+			proxyFactory: () => ({
+				run: () => {
+					worker.dispatchEvent(new Event("error"));
+					return thenable;
+				},
+			}),
+		});
+
+		await expect(pool.run("run", [])).rejects.toBeInstanceOf(
+			WorkerCrashedError,
+		);
+		await flushMicrotasks();
+		expect(thenCalls).toBe(1);
+		await pool.close();
+	});
+
 	test("failure settlement events observe already-decremented running counts", async () => {
 		const worker = new RegressionWorker();
 		const observedCounts: number[] = [];
