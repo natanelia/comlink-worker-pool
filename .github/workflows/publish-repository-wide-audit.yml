@@ -24,50 +24,27 @@ jobs:
           ref: agent/repository-wide-audit-bootstrap
           fetch-depth: 0
 
-      - name: Diagnose transport integrity
+      - name: Reconstruct and verify final repository tree
         shell: bash
         run: |
-          set -uo pipefail
-          {
-            printf 'chunk-count '
-            find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' | wc -l
-            for file in $(find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' | sort); do
-              printf '%s bytes=' "$file"
-              wc -c < "$file" | tr -d ' '
-              printf '%s git-blob=' "$file"
-              git hash-object "$file"
-              printf '%s sha256=' "$file"
-              sha256sum "$file" | cut -d' ' -f1
-            done
-          } > transport-diagnostics.txt
-          set +e
+          set -euo pipefail
+          test "$(find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' | wc -l)" -eq 15
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('.transport/final-tree.07.b64')
+          data = path.read_bytes()
+          if len(data) == 8_001 and data.endswith(b'Y'):
+              path.write_bytes(data[:-1])
+          elif len(data) != 8_000:
+              raise SystemExit(f'unexpected chunk-07 length: {len(data)}')
+          PY
+          test "$(git hash-object .transport/final-tree.07.b64)" = af34eac93522e108ab64f20864d2ae9d2068d0b5
           find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' -print0 \
             | sort -z \
             | xargs -0 cat \
             | tr -d '\r\n' \
             | base64 --decode > /tmp/final-tree.tar.xz
-          decode_status=$?
-          set -e
-          printf 'decode-status %s\n' "$decode_status" >> transport-diagnostics.txt
-          printf 'archive-bytes ' >> transport-diagnostics.txt
-          wc -c < /tmp/final-tree.tar.xz | tr -d ' ' >> transport-diagnostics.txt
-          printf 'archive-sha256 ' >> transport-diagnostics.txt
-          sha256sum /tmp/final-tree.tar.xz | cut -d' ' -f1 >> transport-diagnostics.txt
-
-      - name: Upload transport diagnostics
-        uses: actions/upload-artifact@v4
-        with:
-          name: repository-audit-transport-diagnostics
-          path: |
-            transport-diagnostics.txt
-            .transport/final-tree.07.b64
-          retention-days: 1
-
-      - name: Verify final repository tree
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(find .transport -maxdepth 1 -type f -name 'final-tree.*.b64' | wc -l)" -eq 15
           echo "6cfec224776814eab72de0fe0968b8b27f1d74a13119e8be0849f69bd66ea720  /tmp/final-tree.tar.xz" \
             | sha256sum --check --strict -
           tar -tJf /tmp/final-tree.tar.xz >/dev/null
@@ -83,19 +60,61 @@ jobs:
           test ! -e .transport
           test ! -e .github/workflows/publish-repository-wide-audit.yml
 
+      - name: Correct audited dependency versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('package.json')
+          text = path.read_text()
+          replacements = {
+              '"tmp": "^0.2.6"': '"tmp": "^0.2.4"',
+              '"@happy-dom/global-registrator": "^20.8.9"': '"@happy-dom/global-registrator": "^20.8.8"',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected exactly one dependency version to correct: {old}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.13
 
       - name: Refresh dependency lockfile
-        run: bun update
+        shell: bash
+        run: |
+          set -o pipefail
+          bun update 2>&1 | tee dependency-refresh.log
+
+      - name: Upload dependency refresh diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-audit-dependency-refresh-log
+          path: dependency-refresh.log
+          retention-days: 1
 
       - name: Format repository
         run: bun run format
 
       - name: Run full non-browser verification
-        run: bun run verify
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run verify 2>&1 | tee verify.log
+
+      - name: Upload verification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-audit-verify-log
+          path: verify.log
+          retention-days: 1
 
       - name: Commit and publish clean audit branch
         shell: bash
@@ -106,4 +125,4 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m "Audit and harden the full repository"
-          git push origin HEAD:refs/heads/agent/repository-wide-audit-fixes
+          git push --force-with-lease origin HEAD:refs/heads/agent/repository-wide-audit-fixes
