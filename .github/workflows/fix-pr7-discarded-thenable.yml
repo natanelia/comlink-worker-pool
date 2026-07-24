@@ -1,5 +1,6 @@
 name: Fix PR 7 discarded thenables
 
+# Registered by the preceding pull-request update.
 on:
   pull_request:
     branches:
