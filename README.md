@@ -34,10 +34,11 @@ The repository pins Bun through `packageManager` and CI.
 ```bash
 bun install --frozen-lockfile
 bun run verify
+bun run test:coverage
 bun run playground:dev
 ```
 
-`bun run verify` checks formatting and lint rules, TypeScript, unit tests, builds, runtime and bundle budgets, the playground build, package metadata, packed type surfaces, and clean ESM/CommonJS consumer imports.
+`bun run verify` checks formatting and lint rules, TypeScript, unit tests and coverage, dependency advisories, builds, runtime and bundle budgets, the playground build, package metadata, packed type surfaces, and clean ESM/CommonJS consumer imports.
 
 Real browser worker tests run separately:
 
@@ -45,6 +46,8 @@ Real browser worker tests run separately:
 bunx playwright install chromium firefox webkit
 bun run test:browser
 ```
+
+For watch-mode package builds, run `bun run build:watch`.
 
 The performance harness can also be run directly:
 

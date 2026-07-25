@@ -1,8 +1,6 @@
 {
+	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
-		"target": "ESNext",
-		"module": "ESNext",
-		"moduleResolution": "Bundler",
 		"baseUrl": "../..",
 		"paths": {
 			"comlink-worker-pool": ["packages/comlink-worker-pool/src/index.ts"],
@@ -11,8 +9,6 @@
 			]
 		},
 		"types": ["@playwright/test", "vite/client"],
-		"strict": true,
-		"skipLibCheck": true,
 		"noEmit": true
 	},
 	"include": ["./**/*.ts"]

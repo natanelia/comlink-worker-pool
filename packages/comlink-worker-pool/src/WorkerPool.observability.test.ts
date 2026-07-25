@@ -55,7 +55,9 @@ describe("WorkerPool - observability", () => {
 				run: (value) =>
 					value === "active" ? held.promise : Promise.resolve(value),
 			}),
-			onEvent: (event) => events.push(event),
+			onEvent: (event) => {
+				events.push(event);
+			},
 		});
 
 		const active = pool.run("run", ["active"]);
@@ -138,7 +140,9 @@ describe("WorkerPool - observability", () => {
 			workerTerminator: () => {
 				throw new Error("host did not confirm termination");
 			},
-			onEvent: (event) => events.push(event),
+			onEvent: (event) => {
+				events.push(event);
+			},
 		});
 
 		const active = pool.run("run", ["active"]);
@@ -201,7 +205,7 @@ describe("WorkerPool - observability", () => {
 	test("remains balanced when an event observer closes the pool reentrantly", async () => {
 		jest.useFakeTimers({ now: 3_000 });
 		const poolRef: { current?: WorkerPool<ObservedApi> } = {};
-		let timersAfterClose = -1;
+		const events: WorkerPoolEvent[] = [];
 		const worker = new ObservedWorker();
 		const pool = new WorkerPool<ObservedApi>({
 			size: 1,
@@ -209,9 +213,9 @@ describe("WorkerPool - observability", () => {
 			workerFactory: () => worker as unknown as Worker,
 			proxyFactory: () => ({ run: () => new Promise(() => {}) }),
 			onEvent: (event) => {
+				events.push(event);
 				if (event.type === "task-started") {
 					poolRef.current?.terminateAll();
-					timersAfterClose = jest.getTimerCount();
 				}
 			},
 		});
@@ -227,6 +231,12 @@ describe("WorkerPool - observability", () => {
 			workers: 0,
 			runningTasks: 0,
 		});
-		expect(timersAfterClose).toBe(0);
+		const eventCountAfterClose = events.length;
+		jest.advanceTimersByTime(25);
+		await flushMicrotasks();
+		expect(events).toHaveLength(eventCountAfterClose);
+		expect(
+			events.filter((event) => event.type === "task-settled"),
+		).toHaveLength(1);
 	});
 });

@@ -24,19 +24,19 @@
 	"engines": {
 		"node": ">=18"
 	},
-	"main": "./dist/index.cjs",
-	"module": "./dist/index.js",
-	"types": "./dist/index.d.ts",
+	"main": "./dist/cjs/index.cjs",
+	"module": "./dist/esm/index.js",
+	"types": "./dist/esm/index.d.ts",
 	"files": ["dist"],
 	"exports": {
 		".": {
 			"import": {
-				"types": "./dist/index.d.ts",
-				"default": "./dist/index.js"
+				"types": "./dist/esm/index.d.ts",
+				"default": "./dist/esm/index.js"
 			},
 			"require": {
-				"types": "./dist/index.d.cts",
-				"default": "./dist/index.cjs"
+				"types": "./dist/cjs/index.d.cts",
+				"default": "./dist/cjs/index.cjs"
 			}
 		}
 	},
@@ -46,18 +46,18 @@
 		"access": "public"
 	},
 	"scripts": {
-		"build": "bunup",
+		"build": "node ../../scripts/clean-package-dist.mjs && bunup",
 		"test": "bun test",
 		"lint": "biome check .",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"build:watch": "node ../../scripts/clean-package-dist.mjs && bunup --watch"
 	},
 	"dependencies": {
 		"comlink": "^4.4.2"
 	},
 	"devDependencies": {
 		"@types/bun": "1.3.13",
-		"bunup": "^0.4.41",
-		"oxlint": "^0.16.6",
+		"bunup": "^0.16.32",
 		"typescript": "^5.8.3"
 	}
 }

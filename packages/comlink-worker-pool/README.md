@@ -119,7 +119,7 @@ const pool = new WorkerPool<WorkerApi>({
 });
 ```
 
-Observer exceptions are isolated from scheduler behavior.
+Observer exceptions and rejected thenables are isolated from scheduler behavior. Observer promises are consumed for error isolation but are not awaited, so observers must not control scheduler correctness.
 
 ## Configuration
 
@@ -137,23 +137,23 @@ Observer exceptions are isolated from scheduler behavior.
 | `maxTasksPerWorker` | `number` | Retires a worker after assigned task count |
 | `maxWorkerLifetimeMs` | `number` | Retires a worker after the lifetime once idle |
 | `proxyCleanup` | `(proxy: P) => void` | Custom proxy cleanup before worker termination |
-| `onUpdateStats` | `(stats) => void` | Receives live statistics |
-| `onEvent` | `(event) => void` | Receives structured scheduler events |
+| `onUpdateStats` | `(stats) => void \| PromiseLike<unknown>` | Receives live statistics; rejected thenables are isolated |
+| `onEvent` | `(event) => void \| PromiseLike<unknown>` | Receives structured scheduler events; rejected thenables are isolated |
 | `terminationFailureWorkerBuffer` | `number` | Extra physical-worker allowance for quarantined workers |
 | `terminationRetryAttempts` | `number` | Retries after the initial termination attempt, default `3` |
 | `terminationRetryDelayMs` | `number` | Initial retry delay, default `100` ms |
-| `terminationAttemptTimeoutMs` | `number` | Async attempt deadline, default five seconds |
+| `terminationAttemptTimeoutMs` | `number` | Absolute deadline for each asynchronous termination attempt, default five seconds |
 | `workerTerminator` | `(worker) => void \| PromiseLike<unknown>` | Host-specific termination implementation |
-| `onWorkerTerminationError` | `(error) => void` | Receives isolated termination failures |
+| `onWorkerTerminationError` | `(error) => void \| PromiseLike<unknown>` | Receives termination failures; rejected thenables are isolated |
 
 The default five-minute task timeout is the portable recovery mechanism for a worker that silently closes or never settles. Set it to `false` only for intentionally unbounded work. Timed-out calls are not retried because they may already have produced side effects.
 
 ## API
 
-- `getApi()` returns a typed proxy whose methods submit scheduled work.
+- `getApi()` returns a typed proxy whose methods submit scheduled work. The string key `then` is reserved to keep the proxy from being treated as a Promise; invoke an API method named `then` through `run()` instead.
 - `run(method, args, options)` submits a typed call with scheduling controls.
 - `getStats()` returns a current `WorkerPoolStats` snapshot.
-- `drain()` rejects new work, finishes accepted work, and awaits cleanup.
+- `drain()` rejects new work, finishes accepted work, and awaits cleanup. If synchronous lifecycle observers make every replacement worker unusable and no future retry trigger exists, the pool closes and rejects the remaining accepted work rather than leaving the drain promise pending forever.
 - `close()` rejects work immediately and awaits cleanup.
 - `terminated` is the shared final shutdown promise.
 - `terminateAll()` begins immediate shutdown without awaiting its report.

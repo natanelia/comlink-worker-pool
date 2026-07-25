@@ -10,6 +10,7 @@ export interface ScheduledTask<TTask, TResult> extends Task<TTask, TResult> {
 	signal?: AbortSignal;
 	abortHandler?: () => void;
 	queueTimeout?: ReturnType<typeof setTimeout>;
+	queueDeadline?: number;
 	timeout?: ReturnType<typeof setTimeout>;
 }
 
@@ -21,6 +22,7 @@ export interface QueueEviction<TTask, TResult> {
 /** Priority/FIFO queue with bounded-overflow mechanics kept outside the pool. */
 export class SchedulerQueue<TTask, TResult> {
 	private readonly items: ScheduledTask<TTask, TResult>[] = [];
+	private readonly queued = new Set<ScheduledTask<TTask, TResult>>();
 
 	get length(): number {
 		return this.items.length;
@@ -32,33 +34,37 @@ export class SchedulerQueue<TTask, TResult> {
 		);
 		if (index === -1) this.items.push(task);
 		else this.items.splice(index, 0, task);
+		this.queued.add(task);
 	}
 
 	shift(): ScheduledTask<TTask, TResult> | undefined {
-		return this.items.shift();
+		const task = this.items.shift();
+		if (task) this.queued.delete(task);
+		return task;
 	}
 
 	contains(task: ScheduledTask<TTask, TResult>): boolean {
-		return this.items.includes(task);
+		return this.queued.has(task);
 	}
 
 	remove(task: ScheduledTask<TTask, TResult>): boolean {
+		if (!this.queued.has(task)) return false;
 		const index = this.items.indexOf(task);
 		if (index === -1) return false;
 		this.items.splice(index, 1);
+		this.queued.delete(task);
 		return true;
 	}
 
 	drain(): ScheduledTask<TTask, TResult>[] {
-		return this.items.splice(0);
+		const tasks = this.items.splice(0);
+		this.queued.clear();
+		return tasks;
 	}
 
 	oldestEnqueuedAt(): number | null {
-		if (this.items.length === 0) return null;
-		return this.items.reduce(
-			(oldest, item) => Math.min(oldest, item.enqueuedAt),
-			Number.POSITIVE_INFINITY,
-		);
+		const oldest = this.queued.values().next().value;
+		return oldest?.enqueuedAt ?? null;
 	}
 
 	enforceLimit(

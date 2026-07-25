@@ -1,21 +1,9 @@
 {
+	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
-		"target": "ESNext",
-		"module": "ESNext",
-		"moduleResolution": "Node",
-		"types": ["bun-types"],
 		"outDir": "dist",
 		"declaration": true,
-		"declarationDir": "dist/types",
-		"strict": true,
-		"esModuleInterop": true,
-		"skipLibCheck": true,
-		"forceConsistentCasingInFileNames": true,
-		"jsx": "react-jsx",
-		"allowJs": true,
-		"checkJs": false,
-		"resolveJsonModule": true,
-		"isolatedModules": true
+		"declarationDir": "dist/types"
 	},
 	"include": ["src/**/*"],
 	"exclude": ["node_modules", "dist"]

@@ -35,6 +35,16 @@ export function monotonicNow(): number {
 		: Date.now();
 }
 
+export function assertFunction(value: unknown, name: string): void {
+	if (typeof value !== "function") {
+		throw new TypeError(`${name} must be a function`);
+	}
+}
+
+export function assertOptionalFunction(value: unknown, name: string): void {
+	if (value !== undefined) assertFunction(value, name);
+}
+
 export function assertPositiveInteger(value: number, name: string): void {
 	if (!Number.isSafeInteger(value) || value < 1) {
 		throw new RangeError(`${name} must be at least 1 and a safe integer`);

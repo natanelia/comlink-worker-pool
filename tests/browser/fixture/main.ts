@@ -15,11 +15,15 @@ async function parallelCalls() {
 		workerFactory: createWorker,
 		proxyFactory: createProxy,
 	});
-	const values = await Promise.all(
-		["a", "b", "c", "d"].map((value) => pool.run("delayEcho", [value, 20])),
-	);
-	const report = await pool.close();
-	return { report, values };
+	try {
+		const values = await Promise.all(
+			["a", "b", "c", "d"].map((value) => pool.run("delayEcho", [value, 20])),
+		);
+		const report = await pool.close();
+		return { report, values };
+	} finally {
+		await pool.close();
+	}
 }
 
 async function recover(method: "crash" | "hang") {
@@ -35,15 +39,18 @@ async function recover(method: "crash" | "hang") {
 		},
 		proxyFactory: createProxy,
 	});
-	let errorName = "";
 	try {
-		await pool.run(method, []);
-	} catch (error) {
-		errorName = error instanceof Error ? error.name : String(error);
+		let errorName = "";
+		try {
+			await pool.run(method, []);
+		} catch (error) {
+			errorName = error instanceof Error ? error.name : String(error);
+		}
+		const recovered = await pool.run("echo", ["recovered"]);
+		return { errorName, recovered, workersCreated };
+	} finally {
+		await pool.close();
 	}
-	const recovered = await pool.run("echo", ["recovered"]);
-	await pool.close();
-	return { errorName, recovered, workersCreated };
 }
 
 async function reactStrictMode() {
@@ -74,13 +81,19 @@ async function reactStrictMode() {
 			});
 			useEffect(() => {
 				if (!api) return;
-				void api.echo("react-ready").then((value) => {
-					root.unmount();
-					setTimeout(
-						() => resolve({ value, workersCreated, workersTerminated }),
-						0,
-					);
-				}, reject);
+				void api.echo("react-ready").then(
+					(value) => {
+						root.unmount();
+						setTimeout(
+							() => resolve({ value, workersCreated, workersTerminated }),
+							0,
+						);
+					},
+					(error) => {
+						root.unmount();
+						reject(error);
+					},
+				);
 			}, [api, reject, resolve]);
 			return createElement("span", null, api ? "ready" : "initializing");
 		}
