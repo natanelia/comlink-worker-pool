@@ -89,6 +89,8 @@ const closeReport = await pool.close(); // reject accepted work immediately
 
 Both methods reject future calls, terminate workers, and return a `WorkerPoolShutdownReport`. The shared `pool.terminated` promise exposes the same final report.
 
+Shutdown completion also waits for synchronous worker construction already in progress. If a factory or proxy setup reenters shutdown, every worker it returns is quarantined and included in the final report before `terminated` resolves.
+
 `terminateAll()` is the synchronous compatibility entry point. It begins immediate close and cleanup but does not await the final report.
 
 Worker termination is retried with bounded exponential backoff. A termination that cannot be confirmed is quarantined and remains visible in statistics. Replacement workers are limited by `terminationFailureWorkerBuffer`, preventing an unbounded number of potentially live workers.

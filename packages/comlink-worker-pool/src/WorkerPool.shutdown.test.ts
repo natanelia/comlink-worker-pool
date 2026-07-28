@@ -150,6 +150,44 @@ describe("WorkerPool - awaitable shutdown", () => {
 		expect(pool.terminated).toBe(closed);
 	});
 
+	test("waits for a worker created during reentrant shutdown", async () => {
+		const worker = new TestWorker();
+		const termination = deferred<void>();
+		const holder: { pool?: WorkerPool<TestApi> } = {};
+		const pool = new WorkerPool<TestApi>({
+			size: 1,
+			terminationRetryAttempts: 0,
+			workerFactory: () => {
+				holder.pool?.terminateAll();
+				return worker as unknown as Worker;
+			},
+			proxyFactory: () => ({ run: async (value) => value }),
+			workerTerminator: () => termination.promise,
+		});
+		holder.pool = pool;
+		let report: WorkerPoolShutdownReport | undefined;
+		void pool.terminated.then((value) => {
+			report = value;
+		});
+
+		await expect(pool.run("run", ["closed"])).rejects.toBeInstanceOf(
+			WorkerPoolTerminatedError,
+		);
+		await flush();
+		expect(report).toBeUndefined();
+		expect(pool.getStats()).toMatchObject({
+			healthyWorkers: 0,
+			quarantinedWorkers: 1,
+		});
+
+		termination.resolve();
+		await expect(pool.terminated).resolves.toEqual({
+			confirmed: true,
+			unconfirmedWorkers: 0,
+			terminationFailures: 0,
+		});
+	});
+
 	test("reports exhausted termination attempts without hanging", async () => {
 		const worker = new TestWorker();
 		const pool = new WorkerPool<TestApi>({

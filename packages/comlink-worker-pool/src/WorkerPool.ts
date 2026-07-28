@@ -29,6 +29,8 @@ import {
 	TerminationController,
 } from "./internal/termination";
 
+const WORKER_FAILURE_EVENT_TYPES = ["error", "messageerror", "close"] as const;
+
 export * from "./errors";
 
 /** Factory for creating a new Web Worker. */
@@ -278,11 +280,15 @@ export class WorkerPool<
 
 	private workers: WorkerMetadata<TProxy, TTask, TResult>[] = [];
 	private readonly queue = new SchedulerQueue<TTask, TResult>();
+	private readonly idleWorkers = new Set<
+		WorkerMetadata<TProxy, TTask, TResult>
+	>();
 	private nextWorkerId = 0;
 	private nextTaskSequence = 0;
 	private accepting = true;
 	private drainRequested = false;
 	private terminationStarted = false;
+	private workerCreationsInProgress = 0;
 	private scheduling = false;
 	private rescheduleRequested = false;
 	private shutdownResolved = false;
@@ -407,13 +413,15 @@ export class WorkerPool<
 				DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS,
 			workerTerminator: options.workerTerminator,
 			onFailure: (error) => {
-				this._emit({
-					type: "worker-termination-failed",
-					timestamp: Date.now(),
-					workerId: error.workerId,
-					attempt: error.attempt,
-					exhausted: error.exhausted,
-				});
+				if (this.onEvent) {
+					this._emit({
+						type: "worker-termination-failed",
+						timestamp: Date.now(),
+						workerId: error.workerId,
+						attempt: error.attempt,
+						exhausted: error.exhausted,
+					});
+				}
 				try {
 					isolateAsyncFailure(options.onWorkerTerminationError?.(error));
 				} catch {
@@ -430,12 +438,18 @@ export class WorkerPool<
 
 	/** Returns a proxy API that schedules method calls on this pool. */
 	public getApi(): TProxy {
+		let cachedMethodName: string | undefined;
+		let cachedMethod: ((...args: unknown[]) => Promise<TResult>) | undefined;
 		const handler: ProxyHandler<object> = {
 			get: (_target, prop) => {
 				// Prevent Promise/React thenable assimilation of the API proxy.
 				if (prop === "then" || typeof prop !== "string") return undefined;
-				return (...args: unknown[]) =>
-					this._run({ method: prop, args } as TTask);
+				if (prop !== cachedMethodName || cachedMethod === undefined) {
+					cachedMethodName = prop;
+					cachedMethod = (...args: unknown[]) =>
+						this._run({ method: prop, args } as TTask);
+				}
+				return cachedMethod;
 			},
 		};
 		return new Proxy(Object.create(null), handler) as TProxy;
@@ -461,7 +475,8 @@ export class WorkerPool<
 		if (
 			this.queue.length > 0 &&
 			this.workers.length === 0 &&
-			this.termination.count === 0
+			this.termination.count === 0 &&
+			this.workerCreationsInProgress === 0
 		) {
 			// A bounded no-progress scheduling pass has no future trigger once the
 			// pool stops accepting submissions. Close rather than leaving drain()
@@ -490,13 +505,14 @@ export class WorkerPool<
 		for (const item of this.queue.drain()) {
 			this._settleTask(item, false, reason, "pool-closed");
 		}
-		for (const worker of [...this.workers]) {
-			for (const item of [...worker.activeTasks]) {
+		while (this.workers.length > 0) {
+			const worker = this.workers[this.workers.length - 1];
+			for (const item of worker.activeTasks) {
 				worker.activeTasks.delete(item);
 				this._settleTask(item, false, reason, "pool-closed");
 			}
-			worker.activeTasks.clear();
-			this._removeWorker(worker, true, "shutdown");
+			if (worker.managed) this._removeWorker(worker, true, "shutdown");
+			else this.workers.pop();
 		}
 		this._updateStats();
 	}
@@ -505,16 +521,23 @@ export class WorkerPool<
 	public getStats(): WorkerPoolStats {
 		const now = monotonicNow();
 		const oldestQueuedAt = this.queue.oldestEnqueuedAt();
-		const runningTasks = this.workers.reduce(
-			(sum, worker) => sum + worker.activeTasks.size,
-			0,
-		);
-		const availableForConcurrency = this.workers.filter(
-			(worker) =>
+		let runningTasks = 0;
+		let idleWorkers = 0;
+		let availableForConcurrency = 0;
+		for (const worker of this.workers) {
+			const activeTasks = worker.activeTasks.size;
+			runningTasks += activeTasks;
+			if (activeTasks === 0) idleWorkers++;
+			if (
 				!worker.markedForTermination &&
-				worker.activeTasks.size < this.maxConcurrentTasksPerWorker &&
-				!this._hasExpired(worker),
-		).length;
+				activeTasks < this.maxConcurrentTasksPerWorker &&
+				(this.maxWorkerLifetimeMs === undefined ||
+					now - worker.createdAt < this.maxWorkerLifetimeMs)
+			) {
+				availableForConcurrency++;
+			}
+		}
+
 		const physicalWorkerCount = this.workers.length + this.termination.count;
 		const uncreatedCapacity = this.terminationStarted
 			? 0
@@ -549,9 +572,7 @@ export class WorkerPool<
 			quarantinedWorkers: this.termination.count,
 			terminationFailureWorkerBuffer: this.terminationFailureWorkerBuffer,
 			terminationFailures: this.termination.failures,
-			idleWorkers: this.workers.filter(
-				(worker) => worker.activeTasks.size === 0,
-			).length,
+			idleWorkers,
 			runningTasks,
 			availableForConcurrency,
 			submittedTasks: this.submittedTasks,
@@ -602,35 +623,40 @@ export class WorkerPool<
 				sequence: this.nextTaskSequence++,
 				enqueuedAt,
 				signal: options.signal,
+				queueIndex: -1,
+				previousQueued: null,
+				nextQueued: null,
 			};
 			this.submittedTasks++;
 			if (item.signal) {
 				item.abortHandler = () => this._abortTask(item);
-				item.signal.addEventListener("abort", item.abortHandler, {
-					once: true,
-				});
-				if (item.signal.aborted) {
-					this._abortTask(item);
+				try {
+					item.signal.addEventListener("abort", item.abortHandler, {
+						once: true,
+					});
+					if (item.signal.aborted) this._abortTask(item);
+				} catch (error) {
+					this._settleTask(item, false, error);
+					this._updateStats();
 					return;
 				}
+				if (item.settled) return;
 			}
-			this._insertQueuedTask(item);
-			this._emit({
-				type: "task-queued",
-				timestamp: Date.now(),
-				taskId: item.sequence,
-				method: String(item.task.method),
-				priority: item.priority,
-			});
+			this.queue.insert(item);
+			if (this.onEvent) {
+				this._emit({
+					type: "task-queued",
+					timestamp: Date.now(),
+					taskId: item.sequence,
+					method: String(item.task.method),
+					priority: item.priority,
+				});
+			}
 			this._startQueueTimer(item, queueTimeoutMs);
 			this._next();
 			this._enforceQueueLimit(item);
 			this._updateStats();
 		});
-	}
-
-	private _insertQueuedTask(item: ScheduledTask<TTask, TResult>): void {
-		this.queue.insert(item);
 	}
 
 	private _enforceQueueLimit(submitted: ScheduledTask<TTask, TResult>): void {
@@ -651,9 +677,7 @@ export class WorkerPool<
 	private _abortTask(item: ScheduledTask<TTask, TResult>): void {
 		if (item.settled) return;
 		this.queue.remove(item);
-		const isRunning = this.workers.some((worker) =>
-			worker.activeTasks.has(item),
-		);
+		const isRunning = item.startedAt !== undefined;
 		this._settleTask(
 			item,
 			false,
@@ -758,18 +782,79 @@ export class WorkerPool<
 	}
 
 	private _getAvailableWorker(): WorkerMetadata<TProxy, TTask, TResult> | null {
-		let leastLoaded: WorkerMetadata<TProxy, TTask, TResult> | null = null;
-		for (const worker of [...this.workers]) {
+		for (const worker of this.idleWorkers) {
+			if (
+				!worker.managed ||
+				worker.markedForTermination ||
+				worker.activeTasks.size !== 0
+			) {
+				this.idleWorkers.delete(worker);
+				continue;
+			}
 			if (this._hasExpired(worker)) {
 				worker.markedForTermination = true;
 				worker.retirementReason = "lifetime";
-				if (worker.activeTasks.size === 0) {
-					this._removeWorker(worker, false, "lifetime");
-				}
+				this._removeWorker(worker, false, "lifetime");
+				continue;
+			}
+			return worker;
+		}
+
+		const physicalWorkerCount = this.workers.length + this.termination.count;
+		const canCreate =
+			this.workers.length < this.size &&
+			physicalWorkerCount < this.physicalWorkerLimit;
+		if (!canCreate) return this._findLeastLoadedWorker();
+
+		this.workerCreationsInProgress++;
+		try {
+			let worker: WorkerMetadata<TProxy, TTask, TResult>;
+			try {
+				worker = this._createWorker();
+			} catch (error) {
+				const fallback = this._findLeastLoadedWorker();
+				if (fallback) return fallback;
+				throw error;
+			}
+			worker.poolIndex = this.workers.length;
+			this.workers.push(worker);
+			worker.managed = true;
+			if (this.onEvent) {
+				this._emit({
+					type: "worker-created",
+					timestamp: Date.now(),
+					workerId: worker.id,
+				});
+			}
+			if (!this._containsWorker(worker)) return null;
+			if (this.terminationStarted) {
+				this._removeWorker(worker, true, "shutdown");
+				return null;
+			}
+			this._startLifetimeTimer(worker);
+			if (!this._containsWorker(worker)) return null;
+			this._startIdleTimer(worker);
+			return worker;
+		} finally {
+			this.workerCreationsInProgress--;
+			if (this.terminationStarted || this.drainRequested) this._updateStats();
+		}
+	}
+
+	private _findLeastLoadedWorker(): WorkerMetadata<
+		TProxy,
+		TTask,
+		TResult
+	> | null {
+		let leastLoaded: WorkerMetadata<TProxy, TTask, TResult> | null = null;
+		for (const worker of this.workers) {
+			if (!worker.managed || worker.markedForTermination) continue;
+			if (this._hasExpired(worker)) {
+				worker.markedForTermination = true;
+				worker.retirementReason = "lifetime";
 				continue;
 			}
 			if (
-				!worker.markedForTermination &&
 				worker.activeTasks.size < this.maxConcurrentTasksPerWorker &&
 				(leastLoaded === null ||
 					worker.activeTasks.size < leastLoaded.activeTasks.size)
@@ -777,44 +862,7 @@ export class WorkerPool<
 				leastLoaded = worker;
 			}
 		}
-
-		const physicalWorkerCount = this.workers.length + this.termination.count;
-		const canCreate =
-			this.workers.length < this.size &&
-			physicalWorkerCount < this.physicalWorkerLimit;
-		if (!canCreate || leastLoaded?.activeTasks.size === 0) {
-			return leastLoaded;
-		}
-
-		let worker: WorkerMetadata<TProxy, TTask, TResult>;
-		try {
-			worker = this._createWorker();
-		} catch (error) {
-			if (
-				leastLoaded &&
-				this._containsWorker(leastLoaded) &&
-				!leastLoaded.markedForTermination &&
-				leastLoaded.activeTasks.size < this.maxConcurrentTasksPerWorker
-			) {
-				return leastLoaded;
-			}
-			throw error;
-		}
-		this.workers.push(worker);
-		this._emit({
-			type: "worker-created",
-			timestamp: Date.now(),
-			workerId: worker.id,
-		});
-		if (!this._containsWorker(worker)) return null;
-		if (this.terminationStarted) {
-			this._removeWorker(worker, true, "shutdown");
-			return null;
-		}
-		this._startLifetimeTimer(worker);
-		if (!this._containsWorker(worker)) return null;
-		this._startIdleTimer(worker);
-		return worker;
+		return leastLoaded;
 	}
 
 	private _createWorker(): WorkerMetadata<TProxy, TTask, TResult> {
@@ -830,57 +878,65 @@ export class WorkerPool<
 		}
 		this.knownWorkers.add(worker);
 
-		let proxy: TProxy;
+		const id = this.nextWorkerId++;
+		const failureEventTypes: string[] = [];
+		// biome-ignore lint/style/useConst: listener setup must close over metadata before assignment.
+		let metadata: WorkerMetadata<TProxy, TTask, TResult> | undefined;
+		let constructionFailure: WorkerCrashedError | undefined;
+		const failureHandler = (event: Event) => {
+			const cause =
+				typeof ErrorEvent !== "undefined" &&
+				event instanceof ErrorEvent &&
+				event.error !== undefined
+					? event.error
+					: event;
+			const reason = new WorkerCrashedError(id, cause);
+			if (metadata?.managed) {
+				this._handleWorkerFailure(metadata, reason);
+			} else {
+				constructionFailure ??= reason;
+			}
+		};
+
+		let proxy: TProxy | undefined;
 		try {
-			proxy = this.proxyFactory(worker);
+			for (const type of WORKER_FAILURE_EVENT_TYPES) {
+				failureEventTypes.push(type);
+				worker.addEventListener(type, failureHandler);
+				if (constructionFailure) throw constructionFailure;
+			}
+
+			const createdProxy = this.proxyFactory(worker);
 			if (
-				(typeof proxy !== "object" && typeof proxy !== "function") ||
-				!proxy
+				(typeof createdProxy !== "object" &&
+					typeof createdProxy !== "function") ||
+				!createdProxy
 			) {
 				throw new TypeError("proxyFactory must return a proxy object");
 			}
+			proxy = createdProxy;
+			if (constructionFailure) throw constructionFailure;
 		} catch (error) {
-			const termination = this.termination.quarantine(worker);
+			this._removeFailureListeners(worker, failureHandler, failureEventTypes);
+			if (proxy !== undefined) this._cleanupProxy(proxy);
+			const termination = this.termination.quarantine(worker, id);
 			this.termination.attempt(termination);
-			throw error;
+			throw constructionFailure ?? error;
 		}
 
-		const id = this.nextWorkerId++;
-		const metadata = {
+		metadata = {
 			id,
 			proxy,
 			worker,
 			taskCount: 0,
 			createdAt: monotonicNow(),
 			activeTasks: new Set<ScheduledTask<TTask, TResult>>(),
+			poolIndex: -1,
 			markedForTermination: false,
-			failureHandler: (event: Event) => {
-				const cause =
-					typeof ErrorEvent !== "undefined" &&
-					event instanceof ErrorEvent &&
-					event.error !== undefined
-						? event.error
-						: event;
-				this._handleWorkerFailure(
-					metadata,
-					new WorkerCrashedError(metadata.id, cause),
-				);
-			},
-			failureEventTypes: [] as string[],
-		} satisfies WorkerMetadata<TProxy, TTask, TResult>;
-
-		try {
-			for (const type of ["error", "messageerror", "close"]) {
-				worker.addEventListener(type, metadata.failureHandler);
-				metadata.failureEventTypes.push(type);
-			}
-		} catch (error) {
-			const termination = this.termination.quarantine(worker, id);
-			this._removeFailureListeners(metadata);
-			this._cleanupProxy(proxy);
-			this.termination.attempt(termination);
-			throw error;
-		}
+			managed: false,
+			failureHandler,
+			failureEventTypes,
+		};
 		return metadata;
 	}
 
@@ -888,6 +944,7 @@ export class WorkerPool<
 		worker: WorkerMetadata<TProxy, TTask, TResult>,
 		item: ScheduledTask<TTask, TResult>,
 	): void {
+		if (item.settled) return;
 		if (this._expireQueuedTaskIfNeeded(item)) return;
 		if (item.queueTimeout !== undefined) clearTimeout(item.queueTimeout);
 		item.queueTimeout = undefined;
@@ -910,14 +967,14 @@ export class WorkerPool<
 			this._startTaskTimer(worker, item);
 		}
 
-		void Promise.resolve()
-			.then(() => {
+		queueMicrotask(() => {
+			try {
 				if (
 					!this._containsWorker(worker) ||
 					!worker.activeTasks.has(item) ||
 					this._expireTaskIfNeeded(worker, item)
 				) {
-					return undefined;
+					return;
 				}
 				const method = worker.proxy[item.task.method];
 				if (
@@ -925,7 +982,7 @@ export class WorkerPool<
 					!worker.activeTasks.has(item) ||
 					this._expireTaskIfNeeded(worker, item)
 				) {
-					return undefined;
+					return;
 				}
 				if (typeof method !== "function") {
 					throw new TypeError(
@@ -939,22 +996,26 @@ export class WorkerPool<
 					this._expireTaskIfNeeded(worker, item)
 				) {
 					isolateAsyncFailure(result);
-					return undefined;
+					return;
 				}
-				return result;
-			})
-			.then(
-				(result) => this._completeTask(worker, item, true, result as TResult),
-				(error) => this._completeTask(worker, item, false, error),
-			);
-		this._emit({
-			type: "task-started",
-			timestamp: Date.now(),
-			taskId: item.sequence,
-			method: String(item.task.method),
-			workerId: worker.id,
-			queueWaitMs: Math.max(0, item.startedAt - item.enqueuedAt),
+				void Promise.resolve(result).then(
+					(value) => this._completeTask(worker, item, true, value as TResult),
+					(error) => this._completeTask(worker, item, false, error),
+				);
+			} catch (error) {
+				this._completeTask(worker, item, false, error);
+			}
 		});
+		if (this.onEvent) {
+			this._emit({
+				type: "task-started",
+				timestamp: Date.now(),
+				taskId: item.sequence,
+				method: String(item.task.method),
+				workerId: worker.id,
+				queueWaitMs: Math.max(0, item.startedAt - item.enqueuedAt),
+			});
+		}
 	}
 
 	private _completeTask(
@@ -991,7 +1052,7 @@ export class WorkerPool<
 	): void {
 		if (!this._containsWorker(worker)) return;
 		worker.markedForTermination = true;
-		for (const item of [...worker.activeTasks]) {
+		for (const item of worker.activeTasks) {
 			worker.activeTasks.delete(item);
 			const taskReason =
 				triggeringTask !== undefined && item !== triggeringTask
@@ -1031,8 +1092,13 @@ export class WorkerPool<
 			item.timeout = undefined;
 		}
 		if (item.abortHandler && item.signal) {
-			item.signal.removeEventListener("abort", item.abortHandler);
+			const abortHandler = item.abortHandler;
 			item.abortHandler = undefined;
+			try {
+				item.signal.removeEventListener("abort", abortHandler);
+			} catch {
+				// A malformed signal must not interrupt task settlement.
+			}
 		}
 		if (item.settled) return;
 		item.settled = true;
@@ -1055,18 +1121,20 @@ export class WorkerPool<
 		}
 		if (succeeded) item.resolve(value as TResult);
 		else item.reject(value);
-		this._emit({
-			type: "task-settled",
-			timestamp: Date.now(),
-			taskId: item.sequence,
-			method: String(item.task.method),
-			workerId: item.workerId,
-			outcome,
-			durationMs: Math.max(
-				0,
-				monotonicNow() - (item.startedAt ?? item.enqueuedAt),
-			),
-		});
+		if (this.onEvent) {
+			this._emit({
+				type: "task-settled",
+				timestamp: Date.now(),
+				taskId: item.sequence,
+				method: String(item.task.method),
+				workerId: item.workerId,
+				outcome,
+				durationMs: Math.max(
+					0,
+					monotonicNow() - (item.startedAt ?? item.enqueuedAt),
+				),
+			});
+		}
 	}
 
 	private _expireTaskIfNeeded(
@@ -1151,8 +1219,9 @@ export class WorkerPool<
 	private _startIdleTimer(
 		worker: WorkerMetadata<TProxy, TTask, TResult>,
 	): void {
-		if (this.workerIdleTimeoutMs === undefined) return;
 		this._clearIdleTimer(worker);
+		this.idleWorkers.add(worker);
+		if (this.workerIdleTimeoutMs === undefined) return;
 		worker.idleDeadline = monotonicNow() + this.workerIdleTimeoutMs;
 
 		const schedule = () => {
@@ -1186,6 +1255,7 @@ export class WorkerPool<
 	private _clearIdleTimer(
 		worker: WorkerMetadata<TProxy, TTask, TResult>,
 	): void {
+		this.idleWorkers.delete(worker);
 		if (worker.idleTimer !== undefined) clearTimeout(worker.idleTimer);
 		worker.idleTimer = undefined;
 		worker.idleDeadline = undefined;
@@ -1196,37 +1266,52 @@ export class WorkerPool<
 		force: boolean,
 		reason: WorkerPoolWorkerRemovalReason,
 	): void {
-		const index = this.workers.findIndex((candidate) => candidate === worker);
-		if (index === -1 || (!force && worker.activeTasks.size > 0)) return;
+		if (!worker.managed || (!force && worker.activeTasks.size > 0)) return;
+		const index = worker.poolIndex;
+		if (index < 0 || this.workers[index] !== worker) return;
 
-		this.workers.splice(index, 1);
+		const last = this.workers.pop() as WorkerMetadata<TProxy, TTask, TResult>;
+		if (last !== worker) {
+			this.workers[index] = last;
+			last.poolIndex = index;
+		}
+		worker.poolIndex = -1;
+		worker.managed = false;
 		const termination = this.termination.quarantine(worker.worker, worker.id);
 		this._clearIdleTimer(worker);
 		if (worker.lifetimeTimer !== undefined) clearTimeout(worker.lifetimeTimer);
 		worker.lifetimeTimer = undefined;
-		this._removeFailureListeners(worker);
+		this._removeFailureListeners(
+			worker.worker,
+			worker.failureHandler,
+			worker.failureEventTypes,
+		);
 		this._cleanupProxy(worker.proxy);
-		this._emit({
-			type: "worker-removed",
-			timestamp: Date.now(),
-			workerId: worker.id,
-			reason,
-		});
+		if (this.onEvent) {
+			this._emit({
+				type: "worker-removed",
+				timestamp: Date.now(),
+				workerId: worker.id,
+				reason,
+			});
+		}
 		this.termination.attempt(termination);
 	}
 
 	private _containsWorker(
 		worker: WorkerMetadata<TProxy, TTask, TResult>,
 	): boolean {
-		return this.workers.some((candidate) => candidate === worker);
+		return worker.managed;
 	}
 
 	private _removeFailureListeners(
-		worker: WorkerMetadata<TProxy, TTask, TResult>,
+		worker: Worker,
+		failureHandler: (event: Event) => void,
+		failureEventTypes: string[],
 	): void {
-		for (const type of worker.failureEventTypes.splice(0)) {
+		for (const type of failureEventTypes.splice(0)) {
 			try {
-				worker.worker.removeEventListener(type, worker.failureHandler);
+				worker.removeEventListener(type, failureHandler);
 			} catch {
 				// Continue removing the remaining listeners independently.
 			}
@@ -1272,6 +1357,7 @@ export class WorkerPool<
 		if (
 			this.drainRequested &&
 			!this.terminationStarted &&
+			this.workerCreationsInProgress === 0 &&
 			this.queue.length === 0 &&
 			this.workers.every((worker) => worker.activeTasks.size === 0)
 		) {
@@ -1281,6 +1367,7 @@ export class WorkerPool<
 		if (
 			this.terminationStarted &&
 			!this.shutdownResolved &&
+			this.workerCreationsInProgress === 0 &&
 			this.workers.length === 0 &&
 			this.termination.allExhausted()
 		) {

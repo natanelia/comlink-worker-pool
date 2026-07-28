@@ -37,4 +37,42 @@ describe("WorkerPool - reentrant scheduling", () => {
 		expect(jest.getTimerCount()).toBe(0);
 		await pool.close();
 	});
+	test("does not execute a task aborted during listener registration", async () => {
+		let invocations = 0;
+		const signal = {
+			aborted: false,
+			reason: "synchronous registration abort",
+			addEventListener: (
+				_type: string,
+				listener: EventListenerOrEventListenerObject,
+			) => {
+				if (typeof listener === "function") listener(new Event("abort"));
+				else listener.handleEvent(new Event("abort"));
+			},
+			removeEventListener: () => {},
+		} as unknown as AbortSignal;
+		const pool = new WorkerPool<ReentrantApi>({
+			size: 1,
+			taskTimeoutMs: false,
+			workerFactory: () => new ReentrantWorker() as unknown as Worker,
+			proxyFactory: () => ({
+				run: async (value) => {
+					invocations++;
+					return value;
+				},
+			}),
+		});
+
+		await expect(
+			pool.run("run", ["cancelled"], { signal }),
+		).rejects.toMatchObject({ name: "WorkerTaskAbortedError" });
+		await Promise.resolve();
+		expect(invocations).toBe(0);
+		expect(pool.getStats()).toMatchObject({
+			cancelledTasks: 1,
+			startedTasks: 0,
+			workers: 0,
+		});
+		await pool.close();
+	});
 });
