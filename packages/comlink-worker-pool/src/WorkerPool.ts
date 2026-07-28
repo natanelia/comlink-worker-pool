@@ -509,13 +509,14 @@ export class WorkerPool<
 			this._settleTask(item, false, reason, "pool-closed");
 		}
 		while (this.workers.length > 0) {
+			const before = this.workers.length;
 			const worker = this.workers[this.workers.length - 1];
 			for (const item of worker.activeTasks) {
 				worker.activeTasks.delete(item);
 				this._settleTask(item, false, reason, "pool-closed");
 			}
 			if (worker.managed) this._removeWorker(worker, true, "shutdown");
-			else this.workers.pop();
+			if (this.workers.length === before) this.workers.pop();
 		}
 		this._updateStats();
 	}
@@ -1270,8 +1271,13 @@ export class WorkerPool<
 		reason: WorkerPoolWorkerRemovalReason,
 	): void {
 		if (!worker.managed || (!force && worker.activeTasks.size > 0)) return;
-		const index = worker.poolIndex;
-		if (index < 0 || this.workers[index] !== worker) return;
+		let index = worker.poolIndex;
+		if (index < 0 || this.workers[index] !== worker) {
+			// Shutdown must still detach and terminate even if poolIndex drifted.
+			if (!force) return;
+			index = this.workers.lastIndexOf(worker);
+			if (index < 0) return;
+		}
 
 		const last = this.workers.pop() as WorkerMetadata<TProxy, TTask, TResult>;
 		if (last !== worker) {
