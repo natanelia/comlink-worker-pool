@@ -70,6 +70,60 @@ describe("WorkerPool - awaitable shutdown", () => {
 		expect(worker.terminateCalls).toBe(1);
 	});
 
+	test("drain resumes work after a bounded no-progress scheduling pass", async () => {
+		const workers: TestWorker[] = [];
+		let failuresRemaining = 3;
+		const pool = new WorkerPool<TestApi>({
+			size: 1,
+			workerFactory: () => {
+				const worker = new TestWorker();
+				workers.push(worker);
+				return worker as unknown as Worker;
+			},
+			proxyFactory: () => ({ run: async (value) => value }),
+			onEvent: (event) => {
+				if (event.type === "worker-created" && failuresRemaining > 0) {
+					failuresRemaining--;
+					workers.at(-1)?.dispatchEvent(new Event("error"));
+				}
+			},
+		});
+		const accepted = pool.run("run", ["accepted"]);
+		expect(pool.getStats()).toMatchObject({ queue: 1, startedTasks: 0 });
+		expect(workers).toHaveLength(2);
+
+		failuresRemaining = 0;
+		const drained = pool.drain();
+		await expect(accepted).resolves.toBe("accepted");
+		await expect(drained).resolves.toMatchObject({ confirmed: true });
+		expect(workers).toHaveLength(3);
+	});
+
+	test("drain closes instead of hanging when no worker can make progress", async () => {
+		const workers: TestWorker[] = [];
+		const pool = new WorkerPool<TestApi>({
+			size: 1,
+			workerFactory: () => {
+				const worker = new TestWorker();
+				workers.push(worker);
+				return worker as unknown as Worker;
+			},
+			proxyFactory: () => ({ run: async (value) => value }),
+			onEvent: (event) => {
+				if (event.type === "worker-created") {
+					workers.at(-1)?.dispatchEvent(new Event("error"));
+				}
+			},
+		});
+		const accepted = pool.run("run", ["unrunnable"]);
+		expect(pool.getStats()).toMatchObject({ queue: 1, startedTasks: 0 });
+
+		const drained = pool.drain();
+		await expect(accepted).rejects.toBeInstanceOf(WorkerPoolTerminatedError);
+		await expect(drained).resolves.toMatchObject({ confirmed: true });
+		expect(pool.getStats()).toMatchObject({ state: "closed", queue: 0 });
+	});
+
 	test("close rejects work immediately and waits for async termination", async () => {
 		const worker = new TestWorker();
 		const call = deferred<string>();

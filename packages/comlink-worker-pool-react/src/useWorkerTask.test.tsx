@@ -44,6 +44,30 @@ describe("useWorkerTask", () => {
 		});
 	});
 
+	it("reports a not-ready error when no API is bound", async () => {
+		type Api = { run(): Promise<string> };
+		const { result, unmount } = renderHook(() =>
+			useWorkerTask<Api, "run">(null, "run"),
+		);
+
+		let received: unknown;
+		await act(async () => {
+			try {
+				await result.current.run();
+			} catch (error) {
+				received = error;
+			}
+		});
+		expect(received).toBeInstanceOf(Error);
+		expect((received as Error).message).toMatch(/not ready/i);
+		expect(result.current).toMatchObject({
+			status: "error",
+			result: null,
+			error: received,
+		});
+		unmount();
+	});
+
 	it("keeps state from the latest-started overlapping invocation", async () => {
 		let resolveFirst!: (value: number) => void;
 		let resolveSecond!: (value: number) => void;

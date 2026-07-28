@@ -67,6 +67,7 @@ export class TerminationController {
 		record.retryTimer = undefined;
 		record.exhausted = false;
 		record.attempts++;
+		const deadline = monotonicNow() + this.options.attemptTimeoutMs;
 
 		let result: ReturnType<WorkerTerminator>;
 		try {
@@ -96,8 +97,16 @@ export class TerminationController {
 		}
 
 		let attemptFinished = false;
-		const deadline = monotonicNow() + this.options.attemptTimeoutMs;
+		let timedOut = false;
 		let timeout!: ReturnType<typeof setTimeout>;
+		const clearAttemptTimer = () => {
+			clearTimeout(timeout);
+			record.attemptTimers.delete(timeout);
+		};
+		const timeoutError = () =>
+			new Error(
+				`Termination attempt timed out after ${this.options.attemptTimeoutMs}ms`,
+			);
 		const handleTimeout = () => {
 			record.attemptTimers.delete(timeout);
 			if (attemptFinished) return;
@@ -111,42 +120,52 @@ export class TerminationController {
 				return;
 			}
 			attemptFinished = true;
-			this.recordFailure(
-				record,
-				new Error(
-					`Termination attempt timed out after ${this.options.attemptTimeoutMs}ms`,
-				),
-			);
+			timedOut = true;
+			this.recordFailure(record, timeoutError());
 		};
-		timeout = setTimeout(
-			handleTimeout,
-			Math.min(this.options.attemptTimeoutMs, MAX_TIMER_DELAY_MS),
-		);
-		record.attemptTimers.add(timeout);
-
-		const terminationPromise = new Promise<unknown>((resolve, reject) => {
-			Reflect.apply(then, result, [resolve, reject]);
-		});
-		void terminationPromise.then(
-			() => {
-				clearTimeout(timeout);
-				record.attemptTimers.delete(timeout);
-				if (attemptFinished) {
+		const confirm = () => {
+			if (attemptFinished) {
+				if (timedOut) {
 					// A late success still confirms that the worker is gone.
 					this.confirm(record);
-					return;
 				}
+				return;
+			}
+			if (monotonicNow() >= deadline) {
 				attemptFinished = true;
+				timedOut = true;
+				clearAttemptTimer();
+				this.recordFailure(record, timeoutError());
 				this.confirm(record);
-			},
-			(error) => {
-				clearTimeout(timeout);
-				record.attemptTimers.delete(timeout);
-				if (attemptFinished) return;
-				attemptFinished = true;
-				this.recordFailure(record, error);
-			},
+				return;
+			}
+			attemptFinished = true;
+			clearAttemptTimer();
+			this.confirm(record);
+		};
+		const reject = (error: unknown) => {
+			if (attemptFinished) return;
+			if (monotonicNow() >= deadline) {
+				clearAttemptTimer();
+				handleTimeout();
+				return;
+			}
+			attemptFinished = true;
+			clearAttemptTimer();
+			this.recordFailure(record, error);
+		};
+
+		const remaining = deadline - monotonicNow();
+		timeout = setTimeout(
+			handleTimeout,
+			Math.max(0, Math.min(remaining, MAX_TIMER_DELAY_MS)),
 		);
+		record.attemptTimers.add(timeout);
+		try {
+			Reflect.apply(then, result, [confirm, reject]);
+		} catch (error) {
+			reject(error);
+		}
 	}
 
 	private confirm(record: TerminationRecord): void {

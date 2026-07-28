@@ -1,26 +1,12 @@
 {
+	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
-		"target": "ESNext",
-		"module": "ESNext",
-		"moduleResolution": "Node",
 		"baseUrl": ".",
 		"paths": {
 			"comlink-worker-pool": ["../comlink-worker-pool/src/index.ts"],
 			"comlink-worker-pool-react": ["../comlink-worker-pool-react/src/index.ts"]
 		},
-		"types": ["bun-types"],
-		"outDir": "dist",
-		"declaration": true,
-		"declarationDir": "dist/types",
-		"strict": true,
-		"esModuleInterop": true,
-		"skipLibCheck": true,
-		"forceConsistentCasingInFileNames": true,
-		"jsx": "react-jsx",
-		"allowJs": true,
-		"checkJs": false,
-		"resolveJsonModule": true,
-		"isolatedModules": true
+		"jsx": "react-jsx"
 	},
 	"include": ["src/**/*"],
 	"exclude": ["node_modules", "dist"]

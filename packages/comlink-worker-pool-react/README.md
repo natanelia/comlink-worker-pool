@@ -84,7 +84,7 @@ When `poolSize` is omitted, the default leaves one reported logical core free an
 
 Inline factory identities do not recreate the pool. Increment or replace `reconfigureKey` when a new `workerFactory`, `proxyFactory`, `proxyCleanup`, or `workerTerminator` must take effect.
 
-Observers are held through stable refs, so updating `onUpdateStats`, `onEvent`, or `onWorkerTerminationError` does not recreate the pool.
+Observers are held through stable refs, so updating `onUpdateStats`, `onEvent`, or `onWorkerTerminationError` does not recreate the pool. Synchronous exceptions and rejected observer thenables are isolated from pool scheduling; returned promises are consumed but not awaited.
 
 ## `useWorkerTask`
 

@@ -178,7 +178,9 @@ describe("useWorkerPool", () => {
 				useWorkerPool<TestApi>({
 					workerFactory: () => new MockWorker() as unknown as Worker,
 					proxyFactory: () => testApiImpl,
-					onUpdateStats: (stats) => observedSizes.push(stats.size),
+					onUpdateStats: (stats) => {
+						observedSizes.push(stats.size);
+					},
 				}),
 			);
 			await waitFor(() => expect(result.current.poolStatus).toBe("ready"));
@@ -318,6 +320,50 @@ describe("useWorkerPool", () => {
 		expect(workers[0].terminateCalls).toBe(1);
 	});
 
+	it("consumes rejected thenables returned by forwarded observers", async () => {
+		const consumed = { event: 0, stats: 0, termination: 0 };
+		const rejection = new Error("observer rejected");
+		const rejectingThenable = (
+			key: keyof typeof consumed,
+		): PromiseLike<unknown> =>
+			({
+				// biome-ignore lint/suspicious/noThenProperty: verifies PromiseLike observer isolation.
+				then: (
+					_resolve: (value: unknown) => void,
+					reject: (reason: unknown) => void,
+				) => {
+					consumed[key]++;
+					reject(rejection);
+				},
+			}) as unknown as PromiseLike<unknown>;
+		const { result, unmount } = renderHook(() =>
+			useWorkerPool<TestApi>({
+				poolSize: 1,
+				maxTasksPerWorker: 1,
+				terminationRetryAttempts: 0,
+				workerFactory: () => new MockWorker() as unknown as Worker,
+				proxyFactory: () => testApiImpl,
+				workerTerminator: () => {
+					throw new Error("host termination failed");
+				},
+				onUpdateStats: () => rejectingThenable("stats"),
+				onEvent: () => rejectingThenable("event"),
+				onWorkerTerminationError: () => rejectingThenable("termination"),
+			}),
+		);
+		await waitFor(() => expect(result.current.poolStatus).toBe("ready"));
+
+		await act(async () => {
+			await expect(result.current.call("add", 1, 2)).resolves.toBe(3);
+		});
+		await waitFor(() => {
+			expect(consumed.stats).toBeGreaterThan(0);
+			expect(consumed.event).toBeGreaterThan(0);
+			expect(consumed.termination).toBe(1);
+		});
+		unmount();
+	});
+
 	it("forwards bounded termination controls and failure callbacks", async () => {
 		const workers: MockWorker[] = [];
 		const terminationErrors: WorkerTerminationError[] = [];
@@ -337,8 +383,12 @@ describe("useWorkerPool", () => {
 				workerTerminator: () => {
 					throw new Error("host termination failed");
 				},
-				onWorkerTerminationError: (error) => terminationErrors.push(error),
-				onEvent: (event) => events.push(event),
+				onWorkerTerminationError: (error) => {
+					terminationErrors.push(error);
+				},
+				onEvent: (event) => {
+					events.push(event);
+				},
 			}),
 		);
 		await waitFor(() => expect(result.current.api).not.toBeNull());

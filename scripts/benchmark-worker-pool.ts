@@ -28,6 +28,7 @@ async function measure(taskTotal: number): Promise<number> {
 	const pool = new WorkerPool<BenchmarkApi>({
 		maxConcurrentTasksPerWorker: 1,
 		maxQueueSize: taskTotal,
+		onUpdateStats: () => {},
 		proxyFactory: () => ({
 			run: async (value: number) => value,
 		}),

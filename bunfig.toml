@@ -1,10 +1,4 @@
-[install]
-
-[run]
-main = "playground/index.html"
-
 [test]
-preload = "./packages/comlink-worker-pool-react/test/setup.ts"
-
-[workspace]
-children = ["packages/comlink-worker-pool", "packages/playground", "packages/comlink-worker-pool-react"]
+preload = ["./packages/comlink-worker-pool-react/test/setup.ts"]
+coverageThreshold = 0.9
+coverageSkipTestFiles = true

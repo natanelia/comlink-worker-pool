@@ -1,7 +1,7 @@
 import * as Comlink from "comlink";
 import type { WorkerPoolEvent, WorkerPoolStats } from "comlink-worker-pool";
 import { useWorkerPool, useWorkerTask } from "comlink-worker-pool-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { WorkerApi } from "./worker";
 
 const DEFAULT_POOL_SIZE = Math.max(
@@ -131,10 +131,8 @@ function App() {
 	const visibleError = pool.error ?? fibTask.error ?? textTask.error;
 	const latestLogId = logs.at(-1)?.id;
 
-	const statusLabel = useMemo(() => {
-		if (pool.poolStatus === "ready" && isBusy) return "working";
-		return pool.poolStatus;
-	}, [isBusy, pool.poolStatus]);
+	const statusLabel =
+		pool.poolStatus === "ready" && isBusy ? "working" : pool.poolStatus;
 
 	useEffect(() => {
 		if (latestLogId !== undefined && logListRef.current) {
@@ -175,7 +173,8 @@ function App() {
 	};
 
 	const runBatch = async () => {
-		if (!pool.api) return;
+		const api = pool.api;
+		if (!api) return;
 		const generation = ++batchGenerationRef.current;
 		const taskTotal = Math.max(1, Math.min(40, Math.round(batchCount)));
 		const delayMs = Math.max(0, Math.min(5_000, Math.round(batchDelay)));
@@ -183,12 +182,7 @@ function App() {
 		setBatchDelay(delayMs);
 		setBatch({ completed: 0, failed: 0, status: "running" });
 		const calls = Array.from({ length: taskTotal }, (_, index) =>
-			pool.api?.delayedTransform(`task-${index + 1}`, delayMs),
-		).filter(
-			(
-				call,
-			): call is Promise<Awaited<ReturnType<WorkerApi["delayedTransform"]>>> =>
-				Boolean(call),
+			api.delayedTransform(`task-${index + 1}`, delayMs),
 		);
 		const settled = await Promise.allSettled(calls);
 		if (batchGenerationRef.current !== generation) return;

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import {
 	WorkerCrashedError,
 	WorkerPool,
@@ -101,6 +101,20 @@ async function flushMicrotasks(): Promise<void> {
 	await Promise.resolve();
 	await Promise.resolve();
 	await Promise.resolve();
+}
+
+afterEach(() => {
+	if (jest.isFakeTimers()) {
+		jest.clearAllTimers();
+		jest.useRealTimers();
+	}
+});
+
+function blockEventLoopFor(durationMs: number): void {
+	const signal = new Int32Array(
+		new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+	);
+	Atomics.wait(signal, 0, 0, durationMs);
 }
 
 describe("WorkerPool - lifecycle robustness", () => {
@@ -312,6 +326,22 @@ describe("WorkerPool - lifecycle robustness", () => {
 		proxyFailurePool.terminateAll();
 	});
 
+	test("rejects invalid proxy values and cleans up their partial worker", async () => {
+		const worker = new ControlledWorker();
+		const pool = new WorkerPool<{ run(): Promise<void> }>({
+			size: 1,
+			workerFactory: () => asWorker(worker),
+			proxyFactory: () => null as unknown as { run(): Promise<void> },
+		});
+
+		await expect(pool.run("run", [])).rejects.toThrow(
+			"proxyFactory must return a proxy object",
+		);
+		expect(worker.terminateCalls).toBe(1);
+		expect(pool.getStats()).toMatchObject({ workers: 0, queue: 0 });
+		await pool.close();
+	});
+
 	test("partial listener setup unwinds every listener already registered", async () => {
 		const worker = new PartialListenerWorker();
 		const pool = new WorkerPool({
@@ -386,6 +416,7 @@ describe("WorkerPool - lifecycle robustness", () => {
 	});
 
 	test("only classifies the task that reached its deadline as timed out", async () => {
+		jest.useFakeTimers({ now: 1_000 });
 		const pool = new WorkerPool({
 			size: 1,
 			maxConcurrentTasksPerWorker: 2,
@@ -397,8 +428,10 @@ describe("WorkerPool - lifecycle robustness", () => {
 		});
 
 		const timedOut = pool.run("run", []);
-		await new Promise((resolve) => setTimeout(resolve, 30));
+		jest.advanceTimersByTime(30);
 		const sibling = pool.run("run", []);
+		jest.advanceTimersByTime(30);
+		await flushMicrotasks();
 		const [timedOutResult, siblingResult] = await Promise.allSettled([
 			timedOut,
 			sibling,
@@ -467,6 +500,7 @@ describe("WorkerPool - lifecycle robustness", () => {
 	});
 
 	test("retires an expired idle worker without waiting for another task", async () => {
+		jest.useFakeTimers({ now: 2_000 });
 		const workers: ControlledWorker[] = [];
 		const pool = new WorkerPool({
 			size: 1,
@@ -482,7 +516,8 @@ describe("WorkerPool - lifecycle robustness", () => {
 		});
 		const api = pool.getApi();
 		await expect(api.echo("first")).resolves.toBe("first");
-		await new Promise((resolve) => setTimeout(resolve, 40));
+		jest.advanceTimersByTime(15);
+		await flushMicrotasks();
 		expect(pool.getStats().workers).toBe(0);
 		await expect(api.echo("second")).resolves.toBe("second");
 		expect(workers).toHaveLength(2);
@@ -783,6 +818,68 @@ describe("WorkerPool - lifecycle robustness", () => {
 		pool.terminateAll();
 	});
 
+	test("enforces asynchronous termination deadlines across blocking thenables", async () => {
+		const failures: WorkerTerminationError[] = [];
+		const thenable = {
+			// biome-ignore lint/suspicious/noThenProperty: deliberately adversarial thenable regression.
+			then: (resolve: () => void) => {
+				blockEventLoopFor(20);
+				resolve();
+			},
+		} as unknown as PromiseLike<void>;
+		const pool = new WorkerPool({
+			size: 1,
+			maxTasksPerWorker: 1,
+			terminationRetryAttempts: 0,
+			terminationAttemptTimeoutMs: 5,
+			workerFactory: () => asWorker(new ControlledWorker()),
+			proxyFactory: () => ({ echo: async (value: string) => value }),
+			workerTerminator: () => thenable,
+			onWorkerTerminationError: (error) => {
+				failures.push(error);
+			},
+		});
+
+		await expect(pool.run("echo", ["done"])).resolves.toBe("done");
+		expect(failures).toHaveLength(1);
+		expect(failures[0]).toMatchObject({ attempt: 1, exhausted: true });
+		expect(failures[0].cause).toMatchObject({
+			message: "Termination attempt timed out after 5ms",
+		});
+		await expect(pool.close()).resolves.toMatchObject({
+			confirmed: true,
+			unconfirmedWorkers: 0,
+			terminationFailures: 1,
+		});
+	});
+
+	test("records rejected asynchronous termination attempts", async () => {
+		const cause = new Error("asynchronous termination rejected");
+		const failures: WorkerTerminationError[] = [];
+		const pool = new WorkerPool({
+			size: 1,
+			maxTasksPerWorker: 1,
+			terminationRetryAttempts: 0,
+			workerFactory: () => asWorker(new ControlledWorker()),
+			proxyFactory: () => ({ echo: async (value: string) => value }),
+			workerTerminator: () => Promise.reject(cause),
+			onWorkerTerminationError: (error) => {
+				failures.push(error);
+			},
+		});
+
+		await expect(pool.run("echo", ["done"])).resolves.toBe("done");
+		await flushMicrotasks();
+		expect(failures).toHaveLength(1);
+		expect(failures[0]).toMatchObject({ attempt: 1, exhausted: true });
+		expect(failures[0].cause).toBe(cause);
+		await expect(pool.close()).resolves.toMatchObject({
+			confirmed: false,
+			unconfirmedWorkers: 1,
+			terminationFailures: 1,
+		});
+	});
+
 	test("an asynchronous terminator deadline exhausts capacity instead of hanging the queue", async () => {
 		const errors: WorkerTerminationError[] = [];
 		const never = new Promise<void>(() => {});
@@ -798,7 +895,9 @@ describe("WorkerPool - lifecycle robustness", () => {
 				run: async (value: string) => value,
 			}),
 			workerTerminator: () => never,
-			onWorkerTerminationError: (error) => errors.push(error),
+			onWorkerTerminationError: (error) => {
+				errors.push(error);
+			},
 		});
 		const api = pool.getApi();
 		const first = api.run("first");
@@ -892,6 +991,31 @@ describe("WorkerPool - lifecycle robustness", () => {
 		await expect(api.run()).rejects.toBeInstanceOf(WorkerPoolCapacityError);
 		expect(workers).toHaveLength(1);
 		pool.terminateAll();
+	});
+
+	test("rejects invalid runtime callback configuration", () => {
+		const base = {
+			size: 1,
+			workerFactory: () => asWorker(new ControlledWorker()),
+			proxyFactory: () => ({ run: async () => undefined }),
+		};
+		for (const name of [
+			"workerFactory",
+			"proxyFactory",
+			"onUpdateStats",
+			"onEvent",
+			"proxyCleanup",
+			"workerTerminator",
+			"onWorkerTerminationError",
+		] as const) {
+			expect(
+				() =>
+					new WorkerPool({
+						...base,
+						[name]: null,
+					} as unknown as typeof base),
+			).toThrow(`${name} must be a function`);
+		}
 	});
 
 	test("rejects invalid numeric configuration", () => {

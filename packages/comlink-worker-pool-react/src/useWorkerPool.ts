@@ -5,15 +5,30 @@ import {
 	type WorkerPoolShutdownReport,
 	type WorkerPoolStats,
 } from "comlink-worker-pool";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+
+const useCommittedLayoutEffect =
+	typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 export interface ProxyDefault {
 	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
 	[key: string]: (...args: any[]) => unknown;
 }
 
+type CallableProxy<TProxy> = {
+	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
+	[K in keyof TProxy]: (...args: any[]) => unknown;
+};
+
 /** Options for configuring useWorkerPool. */
-export interface UseWorkerPoolOptions<TProxy extends ProxyDefault> {
+export interface UseWorkerPoolOptions<TProxy extends CallableProxy<TProxy>> {
 	/** Creates a fresh Worker instance. */
 	workerFactory: WorkerFactory;
 	/** Creates the proxy API for a Worker. */
@@ -65,7 +80,7 @@ export interface UseWorkerPoolOptions<TProxy extends ProxyDefault> {
 }
 
 /** State returned from useWorkerPool. */
-export interface UseWorkerPoolResult<TProxy extends ProxyDefault> {
+export interface UseWorkerPoolResult<TProxy extends CallableProxy<TProxy>> {
 	/** Proxy API for direct calls, or null if initialization failed. */
 	api: TProxy | null;
 	/** Lifecycle of the owned pool, separate from the latest task status. */
@@ -92,7 +107,7 @@ export interface UseWorkerPoolResult<TProxy extends ProxyDefault> {
  * renders do not create workers. If calls overlap, only the latest-started
  * call is allowed to update status, result, and error.
  */
-export function useWorkerPool<TProxy extends ProxyDefault>(
+export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 	options: UseWorkerPoolOptions<TProxy>,
 ): UseWorkerPoolResult<TProxy> {
 	const [status, setStatus] = useState<
@@ -104,6 +119,8 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 	const [poolStatus, setPoolStatus] = useState<
 		"initializing" | "ready" | "error" | "closed"
 	>("initializing");
+	const callBinding = useMemo(() => ({ api, poolStatus }), [api, poolStatus]);
+	const activeCallBindingRef = useRef<object | null>(null);
 	const generationRef = useRef(0);
 	const latestCallIdRef = useRef(0);
 	const poolRef = useRef<WorkerPool<TProxy> | null>(null);
@@ -139,6 +156,15 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 		reconfigureKey,
 	} = options;
 
+	useCommittedLayoutEffect(() => {
+		activeCallBindingRef.current = callBinding;
+		return () => {
+			if (activeCallBindingRef.current !== callBinding) return;
+			activeCallBindingRef.current = null;
+			++latestCallIdRef.current;
+		};
+	}, [callBinding]);
+
 	useEffect(() => {
 		void reconfigureKey;
 		const generation = ++generationRef.current;
@@ -161,16 +187,14 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 				size: poolSize ?? defaultPoolSize,
 				workerFactory: workerFactoryRef.current,
 				proxyFactory: proxyFactoryRef.current,
-				onUpdateStats: (stats: WorkerPoolStats) => {
-					if (generationRef.current === generation) {
-						statsCallbackRef.current?.(stats);
-					}
-				},
-				onEvent: (event) => {
-					if (generationRef.current === generation) {
-						eventCallbackRef.current?.(event);
-					}
-				},
+				onUpdateStats: (stats: WorkerPoolStats) =>
+					generationRef.current === generation
+						? statsCallbackRef.current?.(stats)
+						: undefined,
+				onEvent: (event) =>
+					generationRef.current === generation
+						? eventCallbackRef.current?.(event)
+						: undefined,
 				workerIdleTimeoutMs,
 				maxTasksPerWorker,
 				maxWorkerLifetimeMs,
@@ -185,11 +209,10 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 				terminationRetryDelayMs,
 				terminationAttemptTimeoutMs,
 				workerTerminator: workerTerminatorRef.current,
-				onWorkerTerminationError: (terminationError) => {
-					if (generationRef.current === generation) {
-						terminationErrorCallbackRef.current?.(terminationError);
-					}
-				},
+				onWorkerTerminationError: (terminationError) =>
+					generationRef.current === generation
+						? terminationErrorCallbackRef.current?.(terminationError)
+						: undefined,
 			});
 			poolRef.current = pool;
 			setApi(pool.getApi());
@@ -204,7 +227,7 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 				setPoolStatus("error");
 				setStatus("error");
 				setResult(null);
-				setError(initializationError);
+				setError(() => initializationError);
 			}
 		}
 
@@ -235,15 +258,19 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 		reconfigureKey,
 	]);
 
+	const callGeneration = generationRef.current;
 	const call = useCallback(
 		async <K extends keyof TProxy>(
 			method: K,
 			...args: Parameters<TProxy[K]>
 		): Promise<Awaited<ReturnType<TProxy[K]>>> => {
-			const callId = ++latestCallIdRef.current;
-			const generation = generationRef.current;
+			const bindingIsCurrent = () =>
+				activeCallBindingRef.current === callBinding &&
+				generationRef.current === callGeneration;
+			const callId = bindingIsCurrent() ? ++latestCallIdRef.current : undefined;
 			const isCurrent = () =>
-				generationRef.current === generation &&
+				callId !== undefined &&
+				bindingIsCurrent() &&
 				latestCallIdRef.current === callId;
 
 			if (isCurrent()) {
@@ -259,7 +286,7 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 				);
 				if (isCurrent()) {
 					setStatus("error");
-					setError(notInitialized);
+					setError(() => notInitialized);
 				}
 				throw notInitialized;
 			}
@@ -267,25 +294,26 @@ export function useWorkerPool<TProxy extends ProxyDefault>(
 			try {
 				const value = await api[method](...args);
 				if (isCurrent()) {
-					setResult(value);
+					setResult(() => value);
 					setStatus("completed");
 				}
 				return value as Awaited<ReturnType<TProxy[K]>>;
 			} catch (callError) {
 				if (isCurrent()) {
-					setError(callError);
+					setError(() => callError);
 					setStatus("error");
 				}
 				throw callError;
 			}
 		},
-		[api, poolStatus],
+		[api, callBinding, callGeneration, poolStatus],
 	);
 
 	const close =
 		useCallback(async (): Promise<WorkerPoolShutdownReport | null> => {
 			const pool = poolRef.current;
 			if (!pool) return null;
+			activeCallBindingRef.current = null;
 			++latestCallIdRef.current;
 			setApi(null);
 			setPoolStatus("closed");
