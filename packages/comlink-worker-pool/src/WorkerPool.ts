@@ -438,18 +438,21 @@ export class WorkerPool<
 
 	/** Returns a proxy API that schedules method calls on this pool. */
 	public getApi(): TProxy {
-		let cachedMethodName: string | undefined;
-		let cachedMethod: ((...args: unknown[]) => Promise<TResult>) | undefined;
+		const methodCache = new Map<
+			string,
+			(...args: unknown[]) => Promise<TResult>
+		>();
 		const handler: ProxyHandler<object> = {
 			get: (_target, prop) => {
 				// Prevent Promise/React thenable assimilation of the API proxy.
 				if (prop === "then" || typeof prop !== "string") return undefined;
-				if (prop !== cachedMethodName || cachedMethod === undefined) {
-					cachedMethodName = prop;
-					cachedMethod = (...args: unknown[]) =>
+				let cached = methodCache.get(prop);
+				if (cached === undefined) {
+					cached = (...args: unknown[]) =>
 						this._run({ method: prop, args } as TTask);
+					methodCache.set(prop, cached);
 				}
-				return cachedMethod;
+				return cached;
 			},
 		};
 		return new Proxy(Object.create(null), handler) as TProxy;

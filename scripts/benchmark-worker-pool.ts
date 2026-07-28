@@ -114,8 +114,8 @@ async function measureWorkerChurn(workerTotal: number): Promise<number> {
 	for (let value = 0; value < workerTotal; value++) {
 		checksum += await pool.run("run", [value]);
 	}
-	const elapsedMs = performance.now() - startedAt;
 	await pool.close();
+	const elapsedMs = performance.now() - startedAt;
 
 	const expectedChecksum = ((workerTotal - 1) * workerTotal) / 2;
 	if (
@@ -167,8 +167,12 @@ async function collectSamples(
 	const samples: number[] = [];
 	for (let run = 0; run < runCount; run++) samples.push(await measure());
 	samples.sort((left, right) => left - right);
+	const middle = Math.floor(samples.length / 2);
 	return {
-		medianMs: samples[Math.floor(samples.length / 2)],
+		medianMs:
+			samples.length % 2 === 0
+				? (samples[middle - 1] + samples[middle]) / 2
+				: samples[middle],
 		p95Ms: samples[Math.ceil(samples.length * 0.95) - 1],
 	};
 }

@@ -24,7 +24,18 @@ export interface QueueEviction<TTask, TResult> {
 
 const FIFO_QUEUE_INDEX = -2;
 
-/** Priority/FIFO queue with bounded-overflow mechanics kept outside the pool. */
+/**
+ * Priority/FIFO queue with bounded-overflow mechanics kept outside the pool.
+ *
+ * Dual representation invariants:
+ * - The linked list (`oldest`/`newest`) is authoritative in both FIFO and heap
+ *   modes for enqueue order, drain order, oldest-age tracking, and overflow.
+ * - `items` is empty whenever `heapMode === false`. `promoteToHeap()` therefore
+ *   pushes into an empty array, and `contains()` can gate its FIFO branch on
+ *   `!heapMode` without consulting the heap.
+ * - In heap mode, `queueIndex` mirrors membership in `items`; FIFO mode uses
+ *   `FIFO_QUEUE_INDEX` so `remove`/`drain` can unlink without heap bookkeeping.
+ */
 export class SchedulerQueue<TTask, TResult> {
 	private readonly items: ScheduledTask<TTask, TResult>[] = [];
 	private oldest: ScheduledTask<TTask, TResult> | null = null;
