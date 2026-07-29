@@ -40,11 +40,17 @@ export class TerminationController {
 	}
 
 	allExhausted(): boolean {
-		return [...this.records.values()].every((record) => record.exhausted);
+		for (const record of this.records.values()) {
+			if (!record.exhausted) return false;
+		}
+		return true;
 	}
 
 	hasRetryableWorker(): boolean {
-		return [...this.records.values()].some((record) => !record.exhausted);
+		for (const record of this.records.values()) {
+			if (!record.exhausted) return true;
+		}
+		return false;
 	}
 
 	quarantine(worker: Worker, workerId?: number): TerminationRecord {

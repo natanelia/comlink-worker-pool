@@ -150,6 +150,68 @@ describe("WorkerPool - awaitable shutdown", () => {
 		expect(pool.terminated).toBe(closed);
 	});
 
+	test("waits for a worker created during reentrant shutdown", async () => {
+		const worker = new TestWorker();
+		const termination = deferred<void>();
+		const holder: { pool?: WorkerPool<TestApi> } = {};
+		const pool = new WorkerPool<TestApi>({
+			size: 1,
+			terminationRetryAttempts: 0,
+			workerFactory: () => {
+				holder.pool?.terminateAll();
+				return worker as unknown as Worker;
+			},
+			proxyFactory: () => ({ run: async (value) => value }),
+			workerTerminator: () => termination.promise,
+		});
+		holder.pool = pool;
+		let report: WorkerPoolShutdownReport | undefined;
+		void pool.terminated.then((value) => {
+			report = value;
+		});
+
+		await expect(pool.run("run", ["closed"])).rejects.toBeInstanceOf(
+			WorkerPoolTerminatedError,
+		);
+		await flush();
+		expect(report).toBeUndefined();
+		expect(pool.getStats()).toMatchObject({
+			healthyWorkers: 0,
+			quarantinedWorkers: 1,
+		});
+
+		termination.resolve();
+		await expect(pool.terminated).resolves.toEqual({
+			confirmed: true,
+			unconfirmedWorkers: 0,
+			terminationFailures: 0,
+		});
+	});
+
+	test("terminateAll still completes when a managed worker index is corrupt", async () => {
+		const worker = new TestWorker();
+		const pool = new WorkerPool<TestApi>({
+			size: 1,
+			workerFactory: () => worker as unknown as Worker,
+			proxyFactory: () => ({ run: async (value) => value }),
+		});
+		await pool.run("run", ["create worker"]);
+		const internals = pool as unknown as {
+			workers: Array<{ managed: boolean; poolIndex: number }>;
+		};
+		expect(internals.workers).toHaveLength(1);
+		expect(internals.workers[0]?.managed).toBe(true);
+		internals.workers[0].poolIndex = -1;
+
+		await expect(pool.close()).resolves.toEqual({
+			confirmed: true,
+			unconfirmedWorkers: 0,
+			terminationFailures: 0,
+		});
+		expect(worker.terminateCalls).toBe(1);
+		expect(internals.workers).toHaveLength(0);
+	});
+
 	test("reports exhausted termination attempts without hanging", async () => {
 		const worker = new TestWorker();
 		const pool = new WorkerPool<TestApi>({

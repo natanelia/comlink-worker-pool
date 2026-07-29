@@ -55,7 +55,7 @@ The performance harness can also be run directly:
 bun run benchmark
 ```
 
-Its runtime task count, sample count, and p95 budget can be changed with `WORKER_POOL_BENCHMARK_TASKS`, `WORKER_POOL_BENCHMARK_RUNS`, and `WORKER_POOL_BENCHMARK_BUDGET_MS`.
+The runtime harness measures task throughput, sequential worker churn, and burst creation/teardown. Configure task count, sample count, and task p95 with `WORKER_POOL_BENCHMARK_TASKS`, `WORKER_POOL_BENCHMARK_RUNS`, and `WORKER_POOL_BENCHMARK_BUDGET_MS`. Churn uses `WORKER_POOL_BENCHMARK_CHURN_WORKERS` and `WORKER_POOL_BENCHMARK_CHURN_BUDGET_MS`; burst lifecycle uses `WORKER_POOL_BENCHMARK_BURST_WORKERS` and `WORKER_POOL_BENCHMARK_BURST_BUDGET_MS`.
 
 ## Releases
 

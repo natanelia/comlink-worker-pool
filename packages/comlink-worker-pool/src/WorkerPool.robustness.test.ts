@@ -24,9 +24,9 @@ class PartialListenerWorker extends ControlledWorker {
 		callback: EventListenerOrEventListenerObject | null,
 		options?: boolean | AddEventListenerOptions,
 	): void {
-		if (type === "messageerror") throw new Error("listener setup failed");
 		super.addEventListener(type, callback, options);
 		this.activeListenerTypes.add(type);
+		if (type === "messageerror") throw new Error("listener setup failed");
 	}
 
 	override removeEventListener(
@@ -355,6 +355,30 @@ describe("WorkerPool - lifecycle robustness", () => {
 		expect(worker.terminateCalls).toBe(1);
 		expect(pool.getStats()).toMatchObject({ workers: 0, queue: 0 });
 		pool.terminateAll();
+	});
+	test("captures worker failure during proxy construction", async () => {
+		const worker = new ControlledWorker();
+		let invocations = 0;
+		const pool = new WorkerPool({
+			size: 1,
+			workerFactory: () => asWorker(worker),
+			proxyFactory: (createdWorker) => {
+				createdWorker.dispatchEvent(new Event("error"));
+				return {
+					run: async () => {
+						invocations++;
+					},
+				};
+			},
+		});
+
+		await expect(pool.getApi().run()).rejects.toBeInstanceOf(
+			WorkerCrashedError,
+		);
+		expect(invocations).toBe(0);
+		expect(worker.terminateCalls).toBe(1);
+		expect(pool.getStats()).toMatchObject({ workers: 0, queue: 0 });
+		await pool.close();
 	});
 
 	test("termination reentered from worker construction cannot leak a worker", async () => {

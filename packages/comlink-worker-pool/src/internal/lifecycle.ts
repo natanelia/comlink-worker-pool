@@ -11,6 +11,8 @@ export interface WorkerMetadata<TProxy, TTask, TResult> {
 	createdAt: number;
 	activeTasks: Set<ScheduledTask<TTask, TResult>>;
 	markedForTermination: boolean;
+	managed: boolean;
+	poolIndex: number;
 	retirementReason?: "lifetime" | "max-tasks";
 	idleTimer?: ReturnType<typeof setTimeout>;
 	idleDeadline?: number;
