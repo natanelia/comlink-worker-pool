@@ -61,6 +61,14 @@ The runtime harness measures task throughput, sequential worker churn, and burst
 
 [Changesets](https://github.com/changesets/changesets) owns package versioning and the release pull request. Every package-facing change should include a changeset. Merges to `main` run the release workflow, which updates the version PR or publishes approved versions.
 
+To publish the versioned packages to npm and create the matching GitHub Release in one command, authenticate with both npm and GitHub, ensure the release commit is pushed to `origin`, and run:
+
+```bash
+bun run release
+```
+
+A real release requires a clean working tree, runs `bun run verify`, publishes all versioned packages with Changesets, and creates an idempotent `v<version>` GitHub Release with generated notes. Use `bun run release -- --dry-run` to inspect the selected packages and target commit without publishing.
+
 ## License
 
 [MIT](LICENSE)
