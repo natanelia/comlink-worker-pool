@@ -17,6 +17,14 @@ import {
 const useCommittedLayoutEffect =
 	typeof window === "undefined" ? useEffect : useLayoutEffect;
 
+function useCommittedRef<T>(value: T) {
+	const ref = useRef(value);
+	useCommittedLayoutEffect(() => {
+		ref.current = value;
+	}, [value]);
+	return ref;
+}
+
 export interface ProxyDefault {
 	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
 	[key: string]: (...args: any[]) => unknown;
@@ -124,20 +132,15 @@ export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 	const generationRef = useRef(0);
 	const latestCallIdRef = useRef(0);
 	const poolRef = useRef<WorkerPool<TProxy> | null>(null);
-	const statsCallbackRef = useRef(options.onUpdateStats);
-	const eventCallbackRef = useRef(options.onEvent);
-	const workerFactoryRef = useRef(options.workerFactory);
-	const proxyFactoryRef = useRef(options.proxyFactory);
-	const proxyCleanupRef = useRef(options.proxyCleanup);
-	const workerTerminatorRef = useRef(options.workerTerminator);
-	const terminationErrorCallbackRef = useRef(options.onWorkerTerminationError);
-	statsCallbackRef.current = options.onUpdateStats;
-	eventCallbackRef.current = options.onEvent;
-	workerFactoryRef.current = options.workerFactory;
-	proxyFactoryRef.current = options.proxyFactory;
-	proxyCleanupRef.current = options.proxyCleanup;
-	workerTerminatorRef.current = options.workerTerminator;
-	terminationErrorCallbackRef.current = options.onWorkerTerminationError;
+	const statsCallbackRef = useCommittedRef(options.onUpdateStats);
+	const eventCallbackRef = useCommittedRef(options.onEvent);
+	const workerFactoryRef = useCommittedRef(options.workerFactory);
+	const proxyFactoryRef = useCommittedRef(options.proxyFactory);
+	const proxyCleanupRef = useCommittedRef(options.proxyCleanup);
+	const workerTerminatorRef = useCommittedRef(options.workerTerminator);
+	const terminationErrorCallbackRef = useCommittedRef(
+		options.onWorkerTerminationError,
+	);
 
 	const {
 		poolSize,
