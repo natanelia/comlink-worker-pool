@@ -39,7 +39,9 @@ interface WorkerPoolConstructor {
 			args: unknown[];
 		},
 		TResult = Awaited<ReturnType<TProxy[TTask["method"]]>>,
-	>(options: WorkerPoolOptions<TProxy>): WorkerPool<TProxy, TTask, TResult>;
+	>(
+		options: WorkerPoolOptions<TProxy>,
+	): WorkerPool<TProxy, TTask, TResult>;
 }
 
 export const WorkerPool =
