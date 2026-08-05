@@ -1,24 +1,26 @@
-name: Version packages
+name: Prepare version PR patch
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:
-  group: version-packages-${{ github.ref }}
+  group: prepare-version-patch
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  version:
-    name: Create or update version PR
+  prepare:
+    name: Generate reviewed version patch
     runs-on: ubuntu-latest
     steps:
+      - name: Require the main branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Prepare version patches only from main; received $GITHUB_REF" >&2
+            exit 1
+          fi
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -32,12 +34,122 @@ jobs:
           bun-version: 1.3.13
       - name: Install dependencies without lifecycle scripts
         run: bun install --frozen-lockfile --ignore-scripts
-      - name: Create or update version PR
-        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+      - name: Materialize pending Changesets
+        run: bun run version
+      - name: Validate generated version changes
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const { readFileSync } = require("node:fs");
+
+          const packagePaths = [
+            "packages/comlink-worker-pool/package.json",
+            "packages/comlink-worker-pool-react/package.json",
+          ];
+          const allowedPaths = new Set([
+            "bun.lock",
+            "packages/comlink-worker-pool/package.json",
+            "packages/comlink-worker-pool/CHANGELOG.md",
+            "packages/comlink-worker-pool-react/package.json",
+            "packages/comlink-worker-pool-react/CHANGELOG.md",
+          ]);
+          const changedLines = execFileSync(
+            "git",
+            ["diff", "--name-status", "--find-renames=0"],
+            { encoding: "utf8" },
+          )
+            .trim()
+            .split(/\r?\n/)
+            .filter(Boolean);
+          if (changedLines.length === 0) {
+            throw new Error("No pending Changesets produced a version patch");
+          }
+
+          for (const line of changedLines) {
+            const [status, ...pathParts] = line.split("\t");
+            const path = pathParts.at(-1);
+            if (!path) throw new Error(`Invalid git diff entry: ${line}`);
+            if (path.startsWith(".changeset/") && path.endsWith(".md")) {
+              if (status !== "D") {
+                throw new Error(`Changeset files may only be deleted: ${line}`);
+              }
+              continue;
+            }
+            if (!allowedPaths.has(path)) {
+              throw new Error(`Unexpected versioning change: ${line}`);
+            }
+            if (status !== "M") {
+              throw new Error(`Expected a modified generated file: ${line}`);
+            }
+          }
+
+          function readHeadJson(path) {
+            return JSON.parse(
+              execFileSync("git", ["show", `HEAD:${path}`], {
+                encoding: "utf8",
+              }),
+            );
+          }
+          function stripAllowedChanges(packageJson, reactPackage) {
+            const copy = structuredClone(packageJson);
+            delete copy.version;
+            if (reactPackage) {
+              delete copy.dependencies?.["comlink-worker-pool"];
+            }
+            return copy;
+          }
+
+          const packages = packagePaths.map((path, index) => {
+            const before = readHeadJson(path);
+            const after = JSON.parse(readFileSync(path, "utf8"));
+            const beforeStable = stripAllowedChanges(before, index === 1);
+            const afterStable = stripAllowedChanges(after, index === 1);
+            if (JSON.stringify(beforeStable) !== JSON.stringify(afterStable)) {
+              throw new Error(`${path} changed outside version fields`);
+            }
+            if (before.name !== after.name || before.version === after.version) {
+              throw new Error(`${path} did not receive a valid version-only update`);
+            }
+            return after;
+          });
+
+          const versions = new Set(packages.map(({ version }) => version));
+          if (versions.size !== 1) {
+            throw new Error(
+              `Publishable packages must share one version; found ${[
+                ...versions,
+              ].join(", ")}`,
+            );
+          }
+          console.log(
+            `Validated ${packages
+              .map(({ name, version }) => `${name}@${version}`)
+              .join(", ")}`,
+          );
+          NODE
+          git diff --check
+      - name: Create checksummed patch
+        run: |
+          git diff --binary --full-index > version-packages.patch
+          sha256sum version-packages.patch > version-packages.patch.sha256
+      - name: Upload version patch
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          version: bun run version
-          commit: "chore: version packages"
-          title: "chore: version packages"
-          createGithubReleases: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: version-packages-${{ github.sha }}
+          path: |
+            version-packages.patch
+            version-packages.patch.sha256
+          if-no-files-found: error
+          retention-days: 7
+      - name: Write application instructions
+        run: |
+          {
+            echo "## Version patch prepared"
+            echo
+            echo "- Source commit: \`$GITHUB_SHA\`"
+            echo "- Download the \`version-packages-$GITHUB_SHA\` artifact."
+            echo "- Verify \`sha256sum --check version-packages.patch.sha256\`."
+            echo "- Create a branch from this exact main commit and run \`git apply --index version-packages.patch\`."
+            echo "- Inspect the generated versions and changelogs, commit them, and open a normal pull request."
+            echo "- Do not run package-manager code in a shell that holds a GitHub write token."
+          } >> "$GITHUB_STEP_SUMMARY"
