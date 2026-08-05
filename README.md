@@ -63,14 +63,15 @@ The repository disables dependency install scripts, pins GitHub Actions to immut
 
 ## Releases
 
-[Changesets](https://github.com/changesets/changesets) owns package versioning and the release pull request. Every package-facing change should include a changeset. The two published packages form one fixed Changesets group and always share a version.
+[Changesets](https://github.com/changesets/changesets) owns package versioning. Every package-facing change should include a changeset. The two published packages form one fixed Changesets group and always share a version.
 
 Package publication is deliberately split into independent trust zones:
 
-1. Merges to `main` update the Changesets version PR. This workflow has repository write permission but no npm credential or OIDC publishing permission.
-2. A maintainer runs **Stage npm release** from the exact version commit. Dependencies are built in a read-only job without publishing credentials. The resulting tarballs are checksummed and transferred to a separate OIDC job that can only run `npm stage publish`.
-3. A maintainer downloads, verifies, and approves each staged npm package with 2FA. Until that approval, the package is not public.
-4. After both packages are public, a maintainer runs **Finalize npm release** with the exact version and source commit. That workflow verifies npm and source metadata before creating the aggregate `v<version>` GitHub Release.
+1. A maintainer runs **Prepare version PR patch** from `main`. Changesets runs in a read-only workflow with no repository-write or npm authority and produces a checksummed patch artifact.
+2. A maintainer verifies and applies the patch to a branch, inspects the generated versions and changelogs, and opens a normal pull request. That PR follows the same CI and Code Owner protections as every other change.
+3. After the version PR merges, a maintainer runs **Stage npm release** from the exact version commit. Dependencies are built in a read-only job without publishing credentials. The resulting tarballs are checksummed and transferred to a separate OIDC job that can only run `npm stage publish`.
+4. A maintainer downloads, verifies, and approves each staged npm package with 2FA. Until that approval, the package is not public.
+5. After both packages are public, a maintainer runs **Finalize npm release** with the exact version and source commit. That workflow verifies npm and source metadata before creating the aggregate `v<version>` GitHub Release.
 
 The trusted publisher must be configured for `stage-release.yml`, the `npm-release` environment, and staged publishing only. Reusable npm tokens are not supported. The complete one-time setup and per-release checklist are in [SECURITY.md](SECURITY.md).
 
