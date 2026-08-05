@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { useLayoutEffect, useRef } from "react";
+import {
+	type ReactNode,
+	Suspense,
+	startTransition,
+	useLayoutEffect,
+	useRef,
+} from "react";
 import { useWorkerPool } from "./useWorkerPool";
 
 class RegressionWorker extends EventTarget {
@@ -38,6 +44,76 @@ describe("useWorkerPool - regression coverage", () => {
 		});
 		unmount();
 	});
+
+	it("does not publish observers from an abandoned suspended render", async () => {
+		interface Api {
+			echo(value: string): Promise<string>;
+		}
+		let releaseSuspension!: () => void;
+		let shouldSuspend = true;
+		const suspension = new Promise<void>((resolve) => {
+			releaseSuspension = resolve;
+		});
+		const observedLabels: string[] = [];
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<Suspense fallback={null}>{children}</Suspense>
+		);
+		const { result, rerender, unmount } = renderHook(
+			({ label, suspend }: { label: string; suspend: boolean }) => {
+				const pool = useWorkerPool<Api>({
+					poolSize: 1,
+					workerFactory: () => new RegressionWorker() as unknown as Worker,
+					proxyFactory: () => ({ echo: async (value) => value }),
+					onEvent: () => {
+						observedLabels.push(label);
+					},
+				});
+				if (suspend && shouldSuspend) throw suspension;
+				return { label, pool };
+			},
+			{
+				initialProps: { label: "committed", suspend: false },
+				wrapper,
+			},
+		);
+		await waitFor(() => expect(result.current.pool.poolStatus).toBe("ready"));
+		const api = result.current.pool.api;
+		if (!api) throw new Error("Worker pool API was not initialized");
+
+		act(() => {
+			startTransition(() => {
+				rerender({ label: "next", suspend: true });
+			});
+		});
+		expect(result.current.label).toBe("committed");
+
+		observedLabels.length = 0;
+		await act(async () => {
+			await expect(api.echo("first")).resolves.toBe("first");
+		});
+		expect(observedLabels.length).toBeGreaterThan(0);
+		expect(observedLabels.every((label) => label === "committed")).toBe(true);
+
+		shouldSuspend = false;
+		await act(async () => {
+			releaseSuspension();
+			await suspension;
+		});
+		await waitFor(() => expect(result.current.label).toBe("next"));
+
+		observedLabels.length = 0;
+		await act(async () => {
+			await expect(api.echo("second")).resolves.toBe("second");
+		});
+		expect(observedLabels.length).toBeGreaterThan(0);
+		expect(observedLabels.every((label) => label === "next")).toBe(true);
+
+		await act(async () => {
+			await result.current.pool.close();
+		});
+		unmount();
+	});
+
 	it("keeps retained calls from obsolete pool generations state-inert", async () => {
 		interface Api {
 			add(left: number, right: number): Promise<number>;

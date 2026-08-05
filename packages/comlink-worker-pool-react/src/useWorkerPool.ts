@@ -131,13 +131,6 @@ export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 	const proxyCleanupRef = useRef(options.proxyCleanup);
 	const workerTerminatorRef = useRef(options.workerTerminator);
 	const terminationErrorCallbackRef = useRef(options.onWorkerTerminationError);
-	statsCallbackRef.current = options.onUpdateStats;
-	eventCallbackRef.current = options.onEvent;
-	workerFactoryRef.current = options.workerFactory;
-	proxyFactoryRef.current = options.proxyFactory;
-	proxyCleanupRef.current = options.proxyCleanup;
-	workerTerminatorRef.current = options.workerTerminator;
-	terminationErrorCallbackRef.current = options.onWorkerTerminationError;
 
 	const {
 		poolSize,
@@ -155,6 +148,25 @@ export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 		terminationAttemptTimeoutMs,
 		reconfigureKey,
 	} = options;
+
+	// Publish dynamic options only after React commits this render.
+	useCommittedLayoutEffect(() => {
+		statsCallbackRef.current = options.onUpdateStats;
+		eventCallbackRef.current = options.onEvent;
+		workerFactoryRef.current = options.workerFactory;
+		proxyFactoryRef.current = options.proxyFactory;
+		proxyCleanupRef.current = options.proxyCleanup;
+		workerTerminatorRef.current = options.workerTerminator;
+		terminationErrorCallbackRef.current = options.onWorkerTerminationError;
+	}, [
+		options.onUpdateStats,
+		options.onEvent,
+		options.workerFactory,
+		options.proxyFactory,
+		options.proxyCleanup,
+		options.workerTerminator,
+		options.onWorkerTerminationError,
+	]);
 
 	useCommittedLayoutEffect(() => {
 		activeCallBindingRef.current = callBinding;
