@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -45,9 +45,7 @@ function run(command, args, { capture = false } = {}) {
 			});
 		}
 		child.once("error", reject);
-		child.once("close", (code) =>
-			resolve({ code: code ?? 1, stderr, stdout }),
-		);
+		child.once("close", (code) => resolve({ code: code ?? 1, stderr, stdout }));
 	});
 }
 
@@ -84,14 +82,18 @@ function assertPackageContents(packageName, files) {
 			throw new Error(`${packageName} package contains sensitive path ${path}`);
 		}
 		if (!ALLOWED_PACKAGE_FILES.some((pattern) => pattern.test(path))) {
-			throw new Error(`${packageName} package contains unexpected path ${path}`);
+			throw new Error(
+				`${packageName} package contains unexpected path ${path}`,
+			);
 		}
 	}
 }
 
 async function getCommit() {
 	if (process.env.GITHUB_SHA?.trim()) return process.env.GITHUB_SHA.trim();
-	const result = await runChecked("git", ["rev-parse", "HEAD"], { capture: true });
+	const result = await runChecked("git", ["rev-parse", "HEAD"], {
+		capture: true,
+	});
 	return result.stdout.trim();
 }
 
@@ -99,7 +101,11 @@ const expectedVersion = process.env.RELEASE_VERSION?.trim();
 if (!expectedVersion) {
 	throw new Error("RELEASE_VERSION is required");
 }
-if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/.test(expectedVersion)) {
+if (
+	!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/.test(
+		expectedVersion,
+	)
+) {
 	throw new Error(`RELEASE_VERSION is not valid semver: ${expectedVersion}`);
 }
 
@@ -151,13 +157,14 @@ for (const packageInfo of packages) {
 	try {
 		[packResult] = JSON.parse(result.stdout);
 	} catch (error) {
-		throw new Error(
-			`Could not parse npm pack output for ${packageInfo.name}`,
-			{ cause: error },
-		);
+		throw new Error(`Could not parse npm pack output for ${packageInfo.name}`, {
+			cause: error,
+		});
 	}
 	if (!packResult?.filename || !packResult?.integrity || !packResult?.shasum) {
-		throw new Error(`npm pack returned incomplete metadata for ${packageInfo.name}`);
+		throw new Error(
+			`npm pack returned incomplete metadata for ${packageInfo.name}`,
+		);
 	}
 	assertPackageContents(packageInfo.name, packResult.files);
 	const filename = basename(packResult.filename);
