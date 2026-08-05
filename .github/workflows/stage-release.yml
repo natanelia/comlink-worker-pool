@@ -49,6 +49,15 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Verify repository
         run: bun run verify
+      - name: Revalidate immutable source tree
+        run: |
+          node scripts/check-supply-chain-security.mjs
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "Verification modified tracked repository files" >&2
+            git status --short --untracked-files=no >&2
+            git diff -- >&2
+            exit 1
+          fi
       - name: Prepare release tarballs
         run: bun run release:prepare
       - name: Upload immutable release tarballs
