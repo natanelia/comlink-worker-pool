@@ -19,7 +19,9 @@ const argumentsList = process.argv.slice(2);
 const allowEmpty =
 	argumentsList.length === 1 && argumentsList[0] === "--allow-empty";
 if (argumentsList.length > 0 && !allowEmpty) {
-	throw new Error("Usage: node scripts/validate-version-changes.mjs [--allow-empty]");
+	throw new Error(
+		"Usage: node scripts/validate-version-changes.mjs [--allow-empty]",
+	);
 }
 
 const changedLines = execFileSync(
@@ -66,9 +68,9 @@ function readHeadJson(path) {
 
 function stripAllowedChanges(packageJson, reactPackage) {
 	const copy = structuredClone(packageJson);
-	delete copy.version;
-	if (reactPackage) {
-		delete copy.dependencies?.["comlink-worker-pool"];
+	copy.version = undefined;
+	if (reactPackage && copy.dependencies) {
+		copy.dependencies["comlink-worker-pool"] = undefined;
 	}
 	return copy;
 }
