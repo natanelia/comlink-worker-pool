@@ -136,31 +136,8 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Materialize pending Changesets
         run: bun run version
-      - name: Validate publishable package versions
-        run: |
-          node <<'NODE'
-          const { readFileSync } = require("node:fs");
-          const packagePaths = [
-            "packages/comlink-worker-pool/package.json",
-            "packages/comlink-worker-pool-react/package.json",
-          ];
-          const packages = packagePaths.map((path) =>
-            JSON.parse(readFileSync(path, "utf8")),
-          );
-          const versions = new Set(packages.map(({ version }) => version));
-          if (versions.size !== 1) {
-            throw new Error(
-              `Publishable packages must share one version; found ${[
-                ...versions,
-              ].join(", ")}`,
-            );
-          }
-          console.log(
-            `Validated lockstep release ${packages
-              .map(({ name, version }) => `${name}@${version}`)
-              .join(", ")}`,
-          );
-          NODE
+      - name: Validate generated version changes
+        run: node scripts/validate-version-changes.mjs --allow-empty
       - name: Validate generated version files
         run: bun run lint && git diff --check
 
