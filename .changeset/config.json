@@ -5,7 +5,7 @@
 		{ "repo": "https://github.com/natanelia/comlink-worker-pool" }
 	],
 	"commit": false,
-	"fixed": [],
+	"fixed": [["comlink-worker-pool", "comlink-worker-pool-react"]],
 	"linked": [],
 	"access": "public",
 	"baseBranch": "main",
