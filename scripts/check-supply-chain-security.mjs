@@ -13,15 +13,9 @@ const ALLOWED_ACTION_SHAS = new Map([
 		"a1d282b36b6f3519aa1f3fc636f609c47dddb294",
 	],
 	["actions/upload-artifact", "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"],
-	[
-		"actions/download-artifact",
-		"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-	],
+	["actions/download-artifact", "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"],
 	["actions/configure-pages", "45bfe0192ca1faeb007ade9deae92b16b8254a0d"],
-	[
-		"actions/upload-pages-artifact",
-		"fc324d3547104276b827a68afc52ff2a11cc49c9",
-	],
+	["actions/upload-pages-artifact", "fc324d3547104276b827a68afc52ff2a11cc49c9"],
 	["actions/deploy-pages", "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128"],
 	["oven-sh/setup-bun", "0c5077e51419868618aeaa5fe8019c62421857d6"],
 ]);
@@ -188,7 +182,8 @@ for (const workflowName of workflowNames) {
 			const action = match[1];
 			if (!action.startsWith("./")) {
 				const separator = action.lastIndexOf("@");
-				const actionName = separator === -1 ? action : action.slice(0, separator);
+				const actionName =
+					separator === -1 ? action : action.slice(0, separator);
 				const reference = separator === -1 ? "" : action.slice(separator + 1);
 				if (!FULL_COMMIT.test(reference)) {
 					fail(`${workflowName} uses an unpinned action: ${action}`);
@@ -223,8 +218,9 @@ for (const workflowName of workflowNames) {
 
 	const noCredentialCheckoutCount = workflow
 		.split(/\r?\n/)
-		.filter((line) => /^\s*persist-credentials\s*:\s*false\s*$/.test(line))
-		.length;
+		.filter((line) =>
+			/^\s*persist-credentials\s*:\s*false\s*$/.test(line),
+		).length;
 	if (noCredentialCheckoutCount < checkoutCount) {
 		fail(`${workflowName} must disable persisted checkout credentials`);
 	}
@@ -275,9 +271,7 @@ for (const forbiddenPermission of [
 	"GITHUB_TOKEN",
 ]) {
 	if (versionWorkflow.includes(forbiddenPermission)) {
-		fail(
-			`the version-patch workflow must not contain ${forbiddenPermission}`,
-		);
+		fail(`the version-patch workflow must not contain ${forbiddenPermission}`);
 	}
 }
 if (versionWorkflow.includes("publish:")) {
