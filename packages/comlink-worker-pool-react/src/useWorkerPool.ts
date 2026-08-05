@@ -301,11 +301,9 @@ export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 
 			try {
 				const task = api[method] as unknown as PooledMethod<TProxy, K>;
-				const value = (await Reflect.apply(
-					task,
-					api,
-					args,
-				)) as Awaited<ReturnType<PooledMethod<TProxy, K>>>;
+				const value = (await Reflect.apply(task, api, args)) as Awaited<
+					ReturnType<PooledMethod<TProxy, K>>
+				>;
 				if (isCurrent()) {
 					setResult(() => value);
 					setStatus("completed");
