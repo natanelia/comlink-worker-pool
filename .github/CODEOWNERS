@@ -10,4 +10,5 @@
 /packages/*/package.json @natanelia @Joezer-Ivan
 /scripts/check-supply-chain-security.mjs @natanelia @Joezer-Ivan
 /scripts/prepare-release-artifacts.mjs @natanelia @Joezer-Ivan
+/scripts/validate-version-changes.mjs @natanelia @Joezer-Ivan
 /SECURITY.md @natanelia @Joezer-Ivan
