@@ -146,6 +146,7 @@ for (const requiredPath of [
 	"/packages/*/package.json",
 	"/scripts/check-supply-chain-security.mjs",
 	"/scripts/prepare-release-artifacts.mjs",
+	"/scripts/validate-version-changes.mjs",
 ]) {
 	if (!codeOwners.includes(requiredPath)) {
 		fail(`CODEOWNERS does not protect ${requiredPath}`);
