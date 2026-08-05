@@ -206,11 +206,23 @@ if (/(^|\s)npm\s+publish(?:\s|$)/m.test(stageWorkflow)) {
 }
 
 const versionWorkflow = await readText(".github/workflows/release.yml");
-if (versionWorkflow.includes("id-token: write")) {
-	fail("the Changesets version workflow must not receive an OIDC token");
+for (const forbiddenPermission of [
+	"contents: write",
+	"pull-requests: write",
+	"id-token: write",
+	"GITHUB_TOKEN",
+]) {
+	if (versionWorkflow.includes(forbiddenPermission)) {
+		fail(
+			`the version-patch workflow must not contain ${forbiddenPermission}`,
+		);
+	}
 }
 if (versionWorkflow.includes("publish:")) {
-	fail("the Changesets version workflow must not publish packages");
+	fail("the version-patch workflow must not publish packages");
+}
+if (!versionWorkflow.includes("version-packages.patch")) {
+	fail("the version-patch workflow must produce a reviewable patch artifact");
 }
 
 console.log(
