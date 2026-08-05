@@ -1,4 +1,5 @@
 import {
+	type PooledApi,
 	type WorkerFactory,
 	WorkerPool,
 	type WorkerPoolOptions,
@@ -26,6 +27,13 @@ type CallableProxy<TProxy> = {
 	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
 	[K in keyof TProxy]: (...args: any[]) => unknown;
 };
+
+type PooledMethod<
+	TProxy extends CallableProxy<TProxy>,
+	K extends keyof PooledApi<TProxy>,
+> = PooledApi<TProxy>[K] extends (...args: infer TArgs) => infer TResult
+	? (...args: TArgs) => TResult
+	: never;
 
 /** Options for configuring useWorkerPool. */
 export interface UseWorkerPoolOptions<TProxy extends CallableProxy<TProxy>> {
@@ -81,8 +89,8 @@ export interface UseWorkerPoolOptions<TProxy extends CallableProxy<TProxy>> {
 
 /** State returned from useWorkerPool. */
 export interface UseWorkerPoolResult<TProxy extends CallableProxy<TProxy>> {
-	/** Proxy API for direct calls, or null if initialization failed. */
-	api: TProxy | null;
+	/** Scheduled proxy API for direct calls, or null if initialization failed. */
+	api: PooledApi<TProxy> | null;
 	/** Lifecycle of the owned pool, separate from the latest task status. */
 	poolStatus: "initializing" | "ready" | "error" | "closed";
 	/** State of the latest call started through call(). */
@@ -92,10 +100,10 @@ export interface UseWorkerPoolResult<TProxy extends CallableProxy<TProxy>> {
 	/** Error from the latest call or pool initialization. */
 	error: unknown;
 	/** Invokes a method and tracks it as the latest call. */
-	call<K extends keyof TProxy>(
+	call<K extends keyof PooledApi<TProxy>>(
 		method: K,
-		...args: Parameters<TProxy[K]>
-	): Promise<Awaited<ReturnType<TProxy[K]>>>;
+		...args: Parameters<PooledMethod<TProxy, K>>
+	): Promise<Awaited<ReturnType<PooledMethod<TProxy, K>>>>;
 	/** Immediately closes the owned pool; null means no pool was created. */
 	close(): Promise<WorkerPoolShutdownReport | null>;
 }
@@ -115,7 +123,7 @@ export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 	>("idle");
 	const [result, setResult] = useState<unknown>(null);
 	const [error, setError] = useState<unknown>(null);
-	const [api, setApi] = useState<TProxy | null>(null);
+	const [api, setApi] = useState<PooledApi<TProxy> | null>(null);
 	const [poolStatus, setPoolStatus] = useState<
 		"initializing" | "ready" | "error" | "closed"
 	>("initializing");
@@ -272,10 +280,10 @@ export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 
 	const callGeneration = generationRef.current;
 	const call = useCallback(
-		async <K extends keyof TProxy>(
+		async <K extends keyof PooledApi<TProxy>>(
 			method: K,
-			...args: Parameters<TProxy[K]>
-		): Promise<Awaited<ReturnType<TProxy[K]>>> => {
+			...args: Parameters<PooledMethod<TProxy, K>>
+		): Promise<Awaited<ReturnType<PooledMethod<TProxy, K>>>> => {
 			const bindingIsCurrent = () =>
 				activeCallBindingRef.current === callBinding &&
 				generationRef.current === callGeneration;
@@ -304,12 +312,15 @@ export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 			}
 
 			try {
-				const value = await api[method](...args);
+				const task = api[method] as unknown as PooledMethod<TProxy, K>;
+				const value = (await Reflect.apply(task, api, args)) as Awaited<
+					ReturnType<PooledMethod<TProxy, K>>
+				>;
 				if (isCurrent()) {
 					setResult(() => value);
 					setStatus("completed");
 				}
-				return value as Awaited<ReturnType<TProxy[K]>>;
+				return value;
 			} catch (callError) {
 				if (isCurrent()) {
 					setError(() => callError);
