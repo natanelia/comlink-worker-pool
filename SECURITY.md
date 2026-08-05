@@ -15,6 +15,7 @@ This repository uses defense in depth against npm supply-chain attacks, includin
 - GitHub Actions are pinned to immutable commit SHAs.
 - Dependency changes receive a dedicated dependency-review check.
 - Dependabot monitors both `bun.lock` and GitHub Actions, with a cooldown for newly published versions; security updates are not delayed by that cooldown.
+- Changesets runs only in read-only jobs. It produces a checksummed patch that a maintainer must inspect, apply, and submit through a normal pull request.
 - Package builds run without npm publishing credentials.
 - Release tarballs are packed once, checksummed, uploaded as an immutable workflow artifact, and passed to a separate staging job.
 - npm publication uses OIDC trusted publishing with `npm stage publish`. A staged package cannot become public until a maintainer inspects and approves it with npm 2FA.
@@ -72,17 +73,20 @@ For both `comlink-worker-pool` and `comlink-worker-pool-react`:
 
 ## Release procedure
 
-1. Merge the Changesets version pull request after all required checks and cross-review.
-2. Run **Stage npm release** from `main` with the exact package version.
-3. After the workflow succeeds:
+1. Run **Prepare version PR patch** from `main`.
+2. Download the `version-packages-<commit>` artifact and verify `version-packages.patch` with its SHA-256 checksum.
+3. Create a branch from that exact `main` commit, apply the patch with `git apply --index version-packages.patch`, inspect all versions and changelogs, commit, and open a normal pull request.
+4. Merge the version pull request only after all required checks and independent Code Owner review.
+5. Run **Stage npm release** from `main` with the exact package version.
+6. After the workflow succeeds:
    - Open npm's staged packages view.
    - Inspect the stage metadata and provenance.
    - Download each staged tarball.
    - Compare its SHA-256 digest with `SHA256SUMS` in the `npm-release-<version>-<commit>` workflow artifact.
    - Inspect the tarball contents. Only `dist/`, package metadata, README, license, and changelog files are allowed.
-4. Approve each staged package with npm 2FA only after the review passes.
-5. Run **Finalize npm release** with the exact version and commit shown by the staging workflow.
-6. Confirm the GitHub Release tag points to that commit and both npm package pages show provenance.
+7. Approve each staged package with npm 2FA only after the review passes.
+8. Run **Finalize npm release** with the exact version and commit shown by the staging workflow.
+9. Confirm the GitHub Release tag points to that commit and both npm package pages show provenance.
 
 Never approve a stage merely because CI is green. The human review is the final independent boundary against a compromised build dependency or GitHub workflow.
 
