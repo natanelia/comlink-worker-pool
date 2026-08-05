@@ -5,6 +5,26 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const WORKFLOW_DIRECTORY = join(ROOT, ".github", "workflows");
 const FULL_COMMIT = /^[0-9a-f]{40}$/;
+const ALLOWED_ACTION_SHAS = new Map([
+	["actions/checkout", "d23441a48e516b6c34aea4fa41551a30e30af803"],
+	["actions/setup-node", "249970729cb0ef3589644e2896645e5dc5ba9c38"],
+	[
+		"actions/dependency-review-action",
+		"a1d282b36b6f3519aa1f3fc636f609c47dddb294",
+	],
+	["actions/upload-artifact", "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"],
+	[
+		"actions/download-artifact",
+		"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+	],
+	["actions/configure-pages", "45bfe0192ca1faeb007ade9deae92b16b8254a0d"],
+	[
+		"actions/upload-pages-artifact",
+		"fc324d3547104276b827a68afc52ff2a11cc49c9",
+	],
+	["actions/deploy-pages", "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128"],
+	["oven-sh/setup-bun", "0c5077e51419868618aeaa5fe8019c62421857d6"],
+]);
 const FORBIDDEN_LIFECYCLE_SCRIPTS = new Set([
 	"preinstall",
 	"install",
@@ -42,10 +62,6 @@ async function readText(relativePath) {
 
 async function readJson(relativePath) {
 	return JSON.parse(await readText(relativePath));
-}
-
-function countMatches(text, expression) {
-	return [...text.matchAll(expression)].length;
 }
 
 function validatePackageManifest(relativePath, packageJson) {
@@ -105,6 +121,14 @@ if (!/\[install\][\s\S]*?\bignoreScripts\s*=\s*true\b/.test(bunConfig)) {
 	fail("bunfig.toml must set [install].ignoreScripts = true");
 }
 
+const bunLock = await readText("bun.lock");
+if (/"trustedDependencies"\s*:/.test(bunLock)) {
+	fail("bun.lock must not retain dependency lifecycle-script trust");
+}
+if (/"(?:file:|git:|git\+|github:|https?:\/\/|link:)/i.test(bunLock)) {
+	fail("bun.lock must not contain non-registry package sources");
+}
+
 const npmConfig = await readText(".npmrc");
 if (!/^ignore-scripts=true$/m.test(npmConfig)) {
 	fail(".npmrc must set ignore-scripts=true");
@@ -151,18 +175,37 @@ if (workflowNames.length === 0) {
 
 for (const workflowName of workflowNames) {
 	const workflow = await readText(`.github/workflows/${workflowName}`);
-
-	for (const match of workflow.matchAll(/^\s*uses:\s*([^\s#]+).*$/gm)) {
-		const action = match[1];
-		if (action.startsWith("./")) continue;
-		const separator = action.lastIndexOf("@");
-		const reference = separator === -1 ? "" : action.slice(separator + 1);
-		if (!FULL_COMMIT.test(reference)) {
-			fail(`${workflowName} uses an unpinned action: ${action}`);
-		}
-	}
+	let checkoutCount = 0;
 
 	for (const line of workflow.split(/\r?\n/)) {
+		if (/^\s*uses\s*:/.test(line)) {
+			const match = line.match(
+				/^\s*uses\s*:\s*["']?([^"'#\s]+)["']?\s*(?:#.*)?$/,
+			);
+			if (!match) {
+				fail(`${workflowName} contains a malformed action reference: ${line}`);
+			}
+			const action = match[1];
+			if (!action.startsWith("./")) {
+				const separator = action.lastIndexOf("@");
+				const actionName = separator === -1 ? action : action.slice(0, separator);
+				const reference = separator === -1 ? "" : action.slice(separator + 1);
+				if (!FULL_COMMIT.test(reference)) {
+					fail(`${workflowName} uses an unpinned action: ${action}`);
+				}
+				const allowedReference = ALLOWED_ACTION_SHAS.get(actionName);
+				if (allowedReference === undefined) {
+					fail(`${workflowName} uses an unapproved action: ${actionName}`);
+				}
+				if (reference !== allowedReference) {
+					fail(
+						`${workflowName} uses unexpected commit ${reference} for ${actionName}`,
+					);
+				}
+				if (actionName === "actions/checkout") checkoutCount++;
+			}
+		}
+
 		if (!line.includes("bun install")) continue;
 		if (
 			!line.includes("--frozen-lockfile") ||
@@ -178,16 +221,35 @@ for (const workflowName of workflowNames) {
 		fail(`${workflowName} contains a reusable npm credential`);
 	}
 
-	const checkoutCount = countMatches(
-		workflow,
-		/uses:\s*actions\/checkout@[0-9a-f]{40}/g,
-	);
-	const noCredentialCheckoutCount = countMatches(
-		workflow,
-		/persist-credentials:\s*false/g,
-	);
+	const noCredentialCheckoutCount = workflow
+		.split(/\r?\n/)
+		.filter((line) => /^\s*persist-credentials\s*:\s*false\s*$/.test(line))
+		.length;
 	if (noCredentialCheckoutCount < checkoutCount) {
 		fail(`${workflowName} must disable persisted checkout credentials`);
+	}
+
+	if (
+		workflow.includes("contents: write") &&
+		workflowName !== "finalize-release.yml"
+	) {
+		fail(`${workflowName} must not receive repository-write permission`);
+	}
+	if (
+		workflow.includes("id-token: write") &&
+		workflowName !== "stage-release.yml" &&
+		workflowName !== "deploy-playground.yml"
+	) {
+		fail(`${workflowName} must not receive OIDC permission`);
+	}
+	if (
+		workflow.includes("pages: write") &&
+		workflowName !== "deploy-playground.yml"
+	) {
+		fail(`${workflowName} must not receive Pages write permission`);
+	}
+	if (workflow.includes("pull-requests: write")) {
+		fail(`${workflowName} must not receive pull-request write permission`);
 	}
 }
 
