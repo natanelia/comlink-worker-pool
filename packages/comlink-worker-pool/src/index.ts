@@ -17,6 +17,9 @@ export type PooledApi<TProxy extends CallableProxy<TProxy>> = {
 		: never]: TProxy[K] extends (...args: infer TArgs) => infer TResult
 		? (...args: TArgs) => Promise<Awaited<TResult>>
 		: never;
+} & {
+	/** Reserved so string-indexed APIs cannot make the scheduling proxy thenable. */
+	readonly then?: never;
 };
 
 /** Public WorkerPool instance with the scheduled API return type. */
