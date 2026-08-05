@@ -31,6 +31,12 @@ jobs:
       RELEASE_COMMIT: ${{ inputs.commit }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Require the main branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Finalize releases only from main; received $GITHUB_REF" >&2
+            exit 1
+          fi
       - name: Require valid immutable inputs
         run: |
           node <<'NODE'
