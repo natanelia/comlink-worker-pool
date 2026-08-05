@@ -1,0 +1,13 @@
+# Security-sensitive supply-chain and release controls require cross-review.
+/.github/workflows/ @natanelia @Joezer-Ivan
+/.github/dependabot.yml @natanelia @Joezer-Ivan
+/.github/CODEOWNERS @natanelia @Joezer-Ivan
+/.changeset/config.json @natanelia @Joezer-Ivan
+/.npmrc @natanelia @Joezer-Ivan
+/bun.lock @natanelia @Joezer-Ivan
+/bunfig.toml @natanelia @Joezer-Ivan
+/package.json @natanelia @Joezer-Ivan
+/packages/*/package.json @natanelia @Joezer-Ivan
+/scripts/check-supply-chain-security.mjs @natanelia @Joezer-Ivan
+/scripts/prepare-release-artifacts.mjs @natanelia @Joezer-Ivan
+/SECURITY.md @natanelia @Joezer-Ivan
