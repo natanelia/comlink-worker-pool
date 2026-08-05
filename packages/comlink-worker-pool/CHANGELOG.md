@@ -1,5 +1,11 @@
 # comlink-worker-pool
 
+## 0.1.2
+
+### Patch Changes
+
+- 2f9c7b3: Correct the public scheduled API types so every pooled method returns a Promise, while reserved `then` and symbol keys are omitted from `getApi()` and the React hook API.
+
 ## 0.1.1
 
 ### Patch Changes

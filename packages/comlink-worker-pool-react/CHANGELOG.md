@@ -1,5 +1,14 @@
 # comlink-worker-pool-react
 
+## 0.1.2
+
+### Patch Changes
+
+- fe0f553: Commit worker-pool callbacks and factories before publishing them to the live pool so suspended or abandoned React renders cannot leak uncommitted options.
+- 2f9c7b3: Correct the public scheduled API types so every pooled method returns a Promise, while reserved `then` and symbol keys are omitted from `getApi()` and the React hook API.
+- Updated dependencies [2f9c7b3]
+  - comlink-worker-pool@0.1.2
+
 ## 0.1.1
 
 ### Patch Changes
