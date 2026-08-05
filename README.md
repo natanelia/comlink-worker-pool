@@ -61,6 +61,8 @@ The runtime harness measures task throughput, sequential worker churn, and burst
 
 [Changesets](https://github.com/changesets/changesets) owns package versioning and the release pull request. Every package-facing change should include a changeset. Merges to `main` run the release workflow, which updates the version PR or publishes approved versions.
 
+The two published packages form one fixed Changesets group and always share a version. The custom release command owns the single aggregate `v<version>` GitHub Release; the Changesets action only coordinates versioning and publication.
+
 To publish the versioned packages to npm and create the matching GitHub Release in one command, authenticate with both npm and GitHub, ensure the release commit is pushed to `origin`, and run:
 
 ```bash
