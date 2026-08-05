@@ -1,0 +1,135 @@
+name: Finalize npm release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published package version, for example 0.1.2
+        required: true
+        type: string
+      commit:
+        description: Exact commit used by the Stage npm release workflow
+        required: true
+        type: string
+
+concurrency:
+  group: finalize-npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Create verified GitHub release
+    runs-on: ubuntu-latest
+    environment: github-release
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require the main branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Finalize releases only from main; received $GITHUB_REF" >&2
+            exit 1
+          fi
+      - name: Require valid immutable inputs
+        run: |
+          node <<'NODE'
+          const version = process.env.RELEASE_VERSION;
+          const commit = process.env.RELEASE_COMMIT;
+          if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+            throw new Error(`Invalid release version ${version}`);
+          }
+          if (!/^[0-9a-f]{40}$/.test(commit)) {
+            throw new Error(`Invalid release commit ${commit}`);
+          }
+          NODE
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org/
+      - name: Verify both packages are public
+        run: |
+          for package_name in comlink-worker-pool comlink-worker-pool-react; do
+            published_version="$(
+              npm view "${package_name}@${RELEASE_VERSION}" version \
+                --registry=https://registry.npmjs.org/
+            )"
+            if [ "$published_version" != "$RELEASE_VERSION" ]; then
+              echo "${package_name}@${RELEASE_VERSION} is not public" >&2
+              exit 1
+            fi
+          done
+      - name: Verify the release commit and package manifests
+        run: |
+          status="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/compare/${RELEASE_COMMIT}...main" \
+              --jq '.status'
+          )"
+          if [ "$status" != "ahead" ] && [ "$status" != "identical" ]; then
+            echo "$RELEASE_COMMIT is not an ancestor of main" >&2
+            exit 1
+          fi
+
+          for manifest_path in \
+            packages/comlink-worker-pool/package.json \
+            packages/comlink-worker-pool-react/package.json
+          do
+            manifest_version="$(
+              gh api \
+                -H "Accept: application/vnd.github.raw+json" \
+                "repos/${GITHUB_REPOSITORY}/contents/${manifest_path}?ref=${RELEASE_COMMIT}" \
+              | node -e '
+                  let input = "";
+                  process.stdin.on("data", (chunk) => (input += chunk));
+                  process.stdin.on("end", () => {
+                    console.log(JSON.parse(input).version);
+                  });
+                '
+            )"
+            if [ "$manifest_version" != "$RELEASE_VERSION" ]; then
+              echo "${manifest_path} is ${manifest_version}, expected ${RELEASE_VERSION}" >&2
+              exit 1
+            fi
+          done
+      - name: Create the immutable GitHub release
+        run: |
+          tag="v${RELEASE_VERSION}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            object_type="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" \
+                --jq '.object.type'
+            )"
+            existing_target="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" \
+                --jq '.object.sha'
+            )"
+            if [ "$object_type" = "tag" ]; then
+              existing_target="$(
+                gh api \
+                  "repos/${GITHUB_REPOSITORY}/git/tags/${existing_target}" \
+                  --jq '.object.sha'
+              )"
+            fi
+            if [ "$existing_target" != "$RELEASE_COMMIT" ]; then
+              echo "$tag already targets $existing_target, not $RELEASE_COMMIT" >&2
+              exit 1
+            fi
+            echo "$tag already exists at the expected commit"
+            exit 0
+          fi
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$RELEASE_COMMIT" \
+            --title "$tag" \
+            --generate-notes

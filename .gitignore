@@ -1,5 +1,6 @@
 node_modules
 dist
+release-artifacts
 .env.local
 .env.*.local
 playwright-report
