@@ -60,9 +60,13 @@ function validatePackageManifest(relativePath, packageJson) {
 	}
 
 	for (const section of DEPENDENCY_SECTIONS) {
-		for (const [name, specifier] of Object.entries(packageJson[section] ?? {})) {
+		for (const [name, specifier] of Object.entries(
+			packageJson[section] ?? {},
+		)) {
 			if (typeof specifier !== "string") {
-				fail(`${relativePath} has a non-string ${section} specifier for ${name}`);
+				fail(
+					`${relativePath} has a non-string ${section} specifier for ${name}`,
+				);
 			}
 			if (
 				FORBIDDEN_DEPENDENCY_PREFIXES.some((prefix) =>
@@ -129,7 +133,10 @@ for (const requiredPath of [
 		fail(`CODEOWNERS does not protect ${requiredPath}`);
 	}
 }
-if (!codeOwners.includes("@natanelia") || !codeOwners.includes("@Joezer-Ivan")) {
+if (
+	!codeOwners.includes("@natanelia") ||
+	!codeOwners.includes("@Joezer-Ivan")
+) {
 	fail("security-sensitive paths must have two independent code owners");
 }
 
@@ -157,7 +164,10 @@ for (const workflowName of workflowNames) {
 
 	for (const line of workflow.split(/\r?\n/)) {
 		if (!line.includes("bun install")) continue;
-		if (!line.includes("--frozen-lockfile") || !line.includes("--ignore-scripts")) {
+		if (
+			!line.includes("--frozen-lockfile") ||
+			!line.includes("--ignore-scripts")
+		) {
 			fail(
 				`${workflowName} must use bun install --frozen-lockfile --ignore-scripts`,
 			);
