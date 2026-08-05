@@ -29,16 +29,16 @@ The package READMEs contain focused API examples. The playground is the complete
 
 ## Development
 
-The repository pins Bun through `packageManager` and CI.
+The repository pins Bun through `packageManager` and CI. Dependency lifecycle scripts are disabled by policy; do not bypass that protection without a reviewed security change.
 
 ```bash
-bun install --frozen-lockfile
+bun install --frozen-lockfile --ignore-scripts
 bun run verify
 bun run test:coverage
 bun run playground:dev
 ```
 
-`bun run verify` checks formatting and lint rules, TypeScript, unit tests and coverage, dependency advisories, builds, runtime and bundle budgets, the playground build, package metadata, packed type surfaces, and clean ESM/CommonJS consumer imports.
+`bun run verify` starts with the repository's supply-chain policy and then checks formatting and lint rules, TypeScript, unit tests and coverage, dependency advisories, builds, runtime and bundle budgets, the playground build, package metadata, packed type surfaces, and clean ESM/CommonJS consumer imports.
 
 Real browser worker tests run separately:
 
@@ -57,19 +57,22 @@ bun run benchmark
 
 The runtime harness measures task throughput, sequential worker churn, and burst creation/teardown. Configure task count, sample count, and task p95 with `WORKER_POOL_BENCHMARK_TASKS`, `WORKER_POOL_BENCHMARK_RUNS`, and `WORKER_POOL_BENCHMARK_BUDGET_MS`. Churn uses `WORKER_POOL_BENCHMARK_CHURN_WORKERS` and `WORKER_POOL_BENCHMARK_CHURN_BUDGET_MS`; burst lifecycle uses `WORKER_POOL_BENCHMARK_BURST_WORKERS` and `WORKER_POOL_BENCHMARK_BURST_BUDGET_MS`.
 
+## Supply-chain security
+
+The repository disables dependency install scripts, pins GitHub Actions to immutable commits, reviews dependency changes, and rejects release credentials in source-controlled workflows. See [SECURITY.md](SECURITY.md) for the enforced policy, required GitHub/npm settings, release-review procedure, and compromise response.
+
 ## Releases
 
-[Changesets](https://github.com/changesets/changesets) owns package versioning and the release pull request. Every package-facing change should include a changeset. Merges to `main` run the release workflow, which updates the version PR or publishes approved versions.
+[Changesets](https://github.com/changesets/changesets) owns package versioning and the release pull request. Every package-facing change should include a changeset. The two published packages form one fixed Changesets group and always share a version.
 
-The two published packages form one fixed Changesets group and always share a version. The custom release command owns the single aggregate `v<version>` GitHub Release; the Changesets action only coordinates versioning and publication.
+Package publication is deliberately split into independent trust zones:
 
-To publish the versioned packages to npm and create the matching GitHub Release in one command, authenticate with both npm and GitHub, ensure the release commit is pushed to `origin`, and run:
+1. Merges to `main` update the Changesets version PR. This workflow has repository write permission but no npm credential or OIDC publishing permission.
+2. A maintainer runs **Stage npm release** from the exact version commit. Dependencies are built in a read-only job without publishing credentials. The resulting tarballs are checksummed and transferred to a separate OIDC job that can only run `npm stage publish`.
+3. A maintainer downloads, verifies, and approves each staged npm package with 2FA. Until that approval, the package is not public.
+4. After both packages are public, a maintainer runs **Finalize npm release** with the exact version and source commit. That workflow verifies npm and source metadata before creating the aggregate `v<version>` GitHub Release.
 
-```bash
-bun run release
-```
-
-A real release requires a clean working tree, runs `bun run verify`, publishes all versioned packages with Changesets, and creates an idempotent `v<version>` GitHub Release with generated notes. Use `bun run release -- --dry-run` to inspect the selected packages and target commit without publishing.
+The trusted publisher must be configured for `stage-release.yml`, the `npm-release` environment, and staged publishing only. Reusable npm tokens are not supported. The complete one-time setup and per-release checklist are in [SECURITY.md](SECURITY.md).
 
 ## License
 
