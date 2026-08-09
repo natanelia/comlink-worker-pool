@@ -1,4 +1,4 @@
-import type { QueueOverflowPolicy, Task } from "../WorkerPool";
+import type { QueueOverflowPolicy, Task } from "../contracts";
 
 export interface ScheduledTask<TTask, TResult> extends Task<TTask, TResult> {
 	settled: boolean;

@@ -66,6 +66,8 @@ function Calculator() {
 
 See the [playground application](../playground/src/App.tsx) and [worker](../playground/src/worker.ts) for a complete runnable example.
 
+`useWorkerPool` also accepts a fresh `SharedWorker` from `workerFactory`; `proxyFactory` receives that worker and can wrap its `port`. Cleanup closes the connection port automatically while retaining the worker long enough to observe startup failures. See the [core SharedWorker example](../comlink-worker-pool/README.md#sharedworker-connections).
+
 ## `useWorkerPool`
 
 The hook creates its pool after the component commits and closes it during cleanup. It returns:

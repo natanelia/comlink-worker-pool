@@ -15,6 +15,44 @@ test("runs real Comlink calls and confirms worker cleanup", async ({
 	expect(result.report).toMatchObject({ confirmed: true });
 });
 
+test("runs concurrent calls through a SharedWorker port", async ({ page }) => {
+	const result = await page.evaluate(() =>
+		window.browserChecks.sharedWorkerConcurrency(),
+	);
+	expect(result.scheduled).toMatchObject({
+		workers: 1,
+		runningTasks: 2,
+		queue: 1,
+	});
+	expect(result.values.map(({ value }) => value)).toEqual(["a", "b", "c"]);
+	expect(Math.max(...result.values.map(({ activeTasks }) => activeTasks))).toBe(
+		2,
+	);
+	expect(result.report).toMatchObject({ confirmed: true });
+});
+
+test("observes SharedWorker startup failures without waiting for task timeout", async ({
+	page,
+	browserName,
+}) => {
+	test.skip(
+		browserName === "webkit",
+		"WebKit does not dispatch SharedWorker startup errors to the owner",
+	);
+
+	const result = await page.evaluate(() =>
+		window.browserChecks.sharedWorkerFailure(),
+	);
+	expect(result).toEqual({
+		errorName: "WorkerCrashedError",
+		report: {
+			confirmed: true,
+			terminationFailures: 0,
+			unconfirmedWorkers: 0,
+		},
+	});
+});
+
 test("recovers from a silent worker close and a wedged call", async ({
 	page,
 }) => {

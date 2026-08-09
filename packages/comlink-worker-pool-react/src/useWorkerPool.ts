@@ -1,10 +1,12 @@
 import {
 	type PooledApi,
 	type WorkerFactory,
+	type WorkerHandle,
 	WorkerPool,
 	type WorkerPoolOptions,
 	type WorkerPoolShutdownReport,
 	type WorkerPoolStats,
+	type WorkerTerminator,
 } from "comlink-worker-pool";
 import {
 	useCallback,
@@ -35,12 +37,7 @@ type PooledMethod<
 	? (...args: TArgs) => TResult
 	: never;
 
-/** Options for configuring useWorkerPool. */
-export interface UseWorkerPoolOptions<TProxy extends CallableProxy<TProxy>> {
-	/** Creates a fresh Worker instance. */
-	workerFactory: WorkerFactory;
-	/** Creates the proxy API for a Worker. */
-	proxyFactory: (worker: Worker) => TProxy;
+interface UseWorkerPoolCommonOptions<TProxy extends CallableProxy<TProxy>> {
 	/** Number of workers (defaults to min(4, hardwareConcurrency - 1), at least 1). */
 	poolSize?: number;
 	/** Receives live pool statistics without causing pool reconfiguration. */
@@ -73,8 +70,6 @@ export interface UseWorkerPoolOptions<TProxy extends CallableProxy<TProxy>> {
 	terminationRetryDelayMs?: WorkerPoolOptions<TProxy>["terminationRetryDelayMs"];
 	/** Deadline for an asynchronous termination attempt. */
 	terminationAttemptTimeoutMs?: WorkerPoolOptions<TProxy>["terminationAttemptTimeoutMs"];
-	/** Optional host-specific worker terminator. */
-	workerTerminator?: WorkerPoolOptions<TProxy>["workerTerminator"];
 	/** Receives termination-attempt failures without reconfiguring the pool. */
 	onWorkerTerminationError?: WorkerPoolOptions<TProxy>["onWorkerTerminationError"];
 	/**
@@ -86,6 +81,35 @@ export interface UseWorkerPoolOptions<TProxy extends CallableProxy<TProxy>> {
 	 */
 	reconfigureKey?: unknown;
 }
+
+interface UseWorkerPoolEndpointOptions<
+	TProxy extends CallableProxy<TProxy>,
+	TWorker extends WorkerHandle,
+> {
+	/** Creates a fresh worker whose lifecycle is owned by the hook. */
+	workerFactory: WorkerFactory<TWorker>;
+	/** Creates the proxy API for the worker. */
+	proxyFactory: (worker: TWorker) => TProxy;
+	/** Optional host-specific worker terminator. */
+	workerTerminator?: WorkerTerminator<TWorker>;
+}
+
+type UseWorkerPoolConfiguration<
+	TProxy extends CallableProxy<TProxy>,
+	TWorker extends WorkerHandle,
+> = UseWorkerPoolCommonOptions<TProxy> &
+	UseWorkerPoolEndpointOptions<TProxy, TWorker>;
+
+/** Options for a hook-owned pool of dedicated workers. */
+export interface UseWorkerPoolOptions<TProxy extends CallableProxy<TProxy>>
+	extends UseWorkerPoolCommonOptions<TProxy>,
+		UseWorkerPoolEndpointOptions<TProxy, Worker> {}
+
+/** Options for a hook-owned pool of SharedWorker connections. */
+export interface UseSharedWorkerPoolOptions<
+	TProxy extends CallableProxy<TProxy>,
+> extends UseWorkerPoolCommonOptions<TProxy>,
+		UseWorkerPoolEndpointOptions<TProxy, SharedWorker> {}
 
 /** State returned from useWorkerPool. */
 export interface UseWorkerPoolResult<TProxy extends CallableProxy<TProxy>> {
@@ -117,6 +141,15 @@ export interface UseWorkerPoolResult<TProxy extends CallableProxy<TProxy>> {
  */
 export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 	options: UseWorkerPoolOptions<TProxy>,
+): UseWorkerPoolResult<TProxy>;
+export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
+	options: UseSharedWorkerPoolOptions<TProxy>,
+): UseWorkerPoolResult<TProxy>;
+export function useWorkerPool<
+	TProxy extends CallableProxy<TProxy>,
+	TWorker extends WorkerHandle,
+>(
+	options: UseWorkerPoolConfiguration<TProxy, TWorker>,
 ): UseWorkerPoolResult<TProxy> {
 	const [status, setStatus] = useState<
 		"idle" | "running" | "error" | "completed"
@@ -134,10 +167,16 @@ export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 	const poolRef = useRef<WorkerPool<TProxy> | null>(null);
 	const statsCallbackRef = useRef(options.onUpdateStats);
 	const eventCallbackRef = useRef(options.onEvent);
-	const workerFactoryRef = useRef(options.workerFactory);
-	const proxyFactoryRef = useRef(options.proxyFactory);
+	const workerFactoryRef = useRef<WorkerFactory<TWorker>>(
+		options.workerFactory,
+	);
+	const proxyFactoryRef = useRef<(worker: TWorker) => TProxy>(
+		options.proxyFactory,
+	);
 	const proxyCleanupRef = useRef(options.proxyCleanup);
-	const workerTerminatorRef = useRef(options.workerTerminator);
+	const workerTerminatorRef = useRef<WorkerTerminator<TWorker> | undefined>(
+		options.workerTerminator,
+	);
 	const terminationErrorCallbackRef = useRef(options.onWorkerTerminationError);
 
 	const {
@@ -203,7 +242,7 @@ export function useWorkerPool<TProxy extends CallableProxy<TProxy>>(
 
 			// Capture factories for this generation. reconfigureKey is the explicit
 			// signal for replacing them; callback identity churn alone is ignored.
-			pool = new WorkerPool<TProxy>({
+			pool = new WorkerPool({
 				size: poolSize ?? defaultPoolSize,
 				workerFactory: workerFactoryRef.current,
 				proxyFactory: proxyFactoryRef.current,

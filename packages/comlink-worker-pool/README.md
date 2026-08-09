@@ -58,6 +58,32 @@ console.log(values, shutdown.confirmed);
 
 Calls through `getApi()` are scheduled lazily. Workers are created as demand arrives, up to `size`.
 
+### SharedWorker connections
+
+A pool can also schedule concurrent calls through a `SharedWorker`. Return the worker itself so the pool can observe its lifecycle; create the Comlink proxy from its connection port:
+
+```ts
+const pool = new WorkerPool<WorkerApi>({
+  size: 1,
+  maxConcurrentTasksPerWorker: 4,
+  workerFactory: () =>
+    new SharedWorker(new URL("./shared-worker.ts", import.meta.url), {
+      type: "module",
+    }),
+  proxyFactory: (worker) => wrap<WorkerApi>(worker.port),
+});
+```
+
+In the shared worker, expose the API on each connection received by `onconnect`:
+
+```ts
+self.onconnect = (event: MessageEvent) => {
+  expose(api, event.ports[0]);
+};
+```
+
+Each factory call must return a fresh `SharedWorker` object. The pool observes errors from both the worker and its port, and closes the connection port when retiring it. Unlike terminating a dedicated `Worker`, closing the port disconnects only that pool connection. Workers created with the same URL and name can still share one underlying process, so `size` counts scheduler-managed connections rather than processes.
+
 ## Scheduling and backpressure
 
 Each worker runs one task at a time by default. Increase `maxConcurrentTasksPerWorker` for APIs that spend most of their time awaiting asynchronous work. CPU-bound tasks normally benefit from one task per worker.
@@ -128,8 +154,8 @@ Observer exceptions and rejected thenables are isolated from scheduler behavior.
 | Option | Type | Behavior |
 | --- | --- | --- |
 | `size` | `number` | Maximum scheduler-managed workers |
-| `workerFactory` | `() => Worker` | Creates a fresh worker |
-| `proxyFactory` | `(worker: Worker) => P` | Creates the worker API proxy |
+| `workerFactory` | `() => Worker \| SharedWorker` | Creates a fresh worker object whose lifecycle the pool owns |
+| `proxyFactory` | `(worker: Worker \| SharedWorker) => P` | Creates the worker API proxy; use `sharedWorker.port` as the Comlink endpoint |
 | `maxConcurrentTasksPerWorker` | `number` | Per-worker concurrency, default `1` |
 | `maxQueueSize` | `number` | Maximum waiting tasks, default unlimited |
 | `queueOverflowPolicy` | `"reject" \| "drop-oldest"` | Full-queue behavior, default `"reject"` |
@@ -145,7 +171,7 @@ Observer exceptions and rejected thenables are isolated from scheduler behavior.
 | `terminationRetryAttempts` | `number` | Retries after the initial termination attempt, default `3` |
 | `terminationRetryDelayMs` | `number` | Initial retry delay, default `100` ms |
 | `terminationAttemptTimeoutMs` | `number` | Absolute deadline for each asynchronous termination attempt, default five seconds |
-| `workerTerminator` | `(worker) => void \| PromiseLike<unknown>` | Host-specific termination implementation |
+| `workerTerminator` | `(worker) => void \| PromiseLike<unknown>` | Host-specific termination; defaults to `Worker.terminate()` or `SharedWorker.port.close()` |
 | `onWorkerTerminationError` | `(error) => void \| PromiseLike<unknown>` | Receives termination failures; rejected thenables are isolated |
 
 The default five-minute task timeout is the portable recovery mechanism for a worker that silently closes or never settles. Set it to `false` only for intentionally unbounded work. Timed-out calls are not retried because they may already have produced side effects.

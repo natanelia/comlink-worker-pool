@@ -1,4 +1,16 @@
 import { releaseProxy } from "comlink";
+import type {
+	CallableProxy,
+	QueueOverflowPolicy,
+	WorkerPoolConfiguration,
+	WorkerPoolEvent,
+	WorkerPoolObserver,
+	WorkerPoolShutdownReport,
+	WorkerPoolStats,
+	WorkerPoolTaskOutcome,
+	WorkerPoolWorkerRemovalReason,
+	WorkerTaskOptions,
+} from "./contracts";
 import {
 	WorkerCrashedError,
 	WorkerPoolCapacityError,
@@ -7,11 +19,11 @@ import {
 	WorkerQueueTimeoutError,
 	WorkerTaskAbortedError,
 	WorkerTaskTimeoutError,
-	type WorkerTerminationError,
 } from "./errors";
 import {
 	DEFAULT_TASK_TIMEOUT_MS,
 	MAX_TIMER_DELAY_MS,
+	type WorkerFailureListenerRegistration,
 	type WorkerMetadata,
 	assertFunction,
 	assertNonNegativeInteger,
@@ -28,227 +40,20 @@ import {
 	DEFAULT_TERMINATION_RETRY_DELAY_MS,
 	TerminationController,
 } from "./internal/termination";
+import {
+	type BoundWorkerTerminator,
+	type WorkerHandle,
+	getWorkerFailureTargets,
+	terminateWorker,
+} from "./worker";
 
-const WORKER_FAILURE_EVENT_TYPES = ["error", "messageerror", "close"] as const;
-
+export * from "./contracts";
 export * from "./errors";
 
-/** Factory for creating a new Web Worker. */
-export type WorkerFactory = () => Worker;
-
-/** Terminates a Worker and resolves only when termination is confirmed. */
-// biome-ignore lint/suspicious/noConfusingVoidType: sync terminators naturally return void.
-export type WorkerTerminator = (worker: Worker) => void | PromiseLike<unknown>;
-
-/** Receives an observable value; returned thenables are consumed without being awaited. */
-// biome-ignore lint/suspicious/noConfusingVoidType: synchronous observers naturally return void.
-export type WorkerPoolObserver<T> = (value: T) => void | PromiseLike<unknown>;
-
-type CallableProxy<TProxy> = {
-	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
-	[K in keyof TProxy]: (...args: any[]) => unknown;
-};
-
-/** Policy applied when a submitted task would exceed maxQueueSize. */
-export type QueueOverflowPolicy = "reject" | "drop-oldest";
-
-/** Per-call scheduling controls for WorkerPool.run(). */
-export interface WorkerTaskOptions {
-	/** Cancels the caller's wait without forcibly interrupting worker code. */
-	signal?: AbortSignal;
-	/** Higher values run before lower values; equal priorities remain FIFO. */
-	priority?: number;
-	/** Maximum time spent waiting in the queue; false disables the pool default. */
-	queueTimeoutMs?: number | false;
-}
-
-/** Observable lifecycle state of a worker pool. */
-export type WorkerPoolState = "running" | "draining" | "closed";
-
-/** Final caller-visible outcome emitted for a scheduled task. */
-export type WorkerPoolTaskOutcome =
-	| "fulfilled"
-	| "rejected"
-	| "aborted"
-	| "queue-timeout"
-	| "task-timeout"
-	| "queue-rejected"
-	| "dropped"
-	| "worker-failure"
-	| "pool-closed";
-
-/** Reason a worker left the scheduler-managed set. */
-export type WorkerPoolWorkerRemovalReason =
-	| "shutdown"
-	| "idle"
-	| "lifetime"
-	| "max-tasks"
-	| "failure"
-	| "task-timeout";
-
-/** A structured, argument-free event emitted by WorkerPool. */
-export type WorkerPoolEvent =
-	| {
-			type: "task-queued";
-			timestamp: number;
-			taskId: number;
-			method: string;
-			priority: number;
-	  }
-	| {
-			type: "task-started";
-			timestamp: number;
-			taskId: number;
-			method: string;
-			workerId: number;
-			queueWaitMs: number;
-	  }
-	| {
-			type: "task-settled";
-			timestamp: number;
-			taskId: number;
-			method: string;
-			workerId?: number;
-			outcome: WorkerPoolTaskOutcome;
-			durationMs: number;
-	  }
-	| {
-			type: "worker-created";
-			timestamp: number;
-			workerId: number;
-	  }
-	| {
-			type: "worker-removed";
-			timestamp: number;
-			workerId: number;
-			reason: WorkerPoolWorkerRemovalReason;
-	  }
-	| {
-			type: "worker-termination-failed";
-			timestamp: number;
-			workerId?: number;
-			attempt: number;
-			exhausted: boolean;
-	  };
-
-/** Statistics describing the current state of a worker pool. */
-export interface WorkerPoolStats {
-	/** Current acceptance and shutdown state. */
-	state: WorkerPoolState;
-	/** Configured maximum number of scheduler-managed, non-quarantined workers. */
-	size: number;
-	/** Configured maximum number of simultaneously running tasks. */
-	maxConcurrentTasks: number;
-	/** Number of existing or not-yet-created workers that can accept work. */
-	available: number;
-	/** Number of tasks waiting for a worker. */
-	queue: number;
-	/** Configured queue limit, or null when the queue is unbounded. */
-	queueCapacity: number | null;
-	/** Remaining bounded queue slots, or null when the queue is unbounded. */
-	queueCapacityRemaining: number | null;
-	/** Age of the oldest waiting task, or null when the queue is empty. */
-	oldestQueuedTaskAgeMs: number | null;
-	/** Number of currently instantiated workers. */
-	workers: number;
-	/** Scheduler-managed workers, including busy workers finishing before retirement. */
-	healthyWorkers: number;
-	/** Number of removed workers whose termination is not yet confirmed. */
-	quarantinedWorkers: number;
-	/** Configured extra physical-worker allowance for quarantined workers. */
-	terminationFailureWorkerBuffer: number;
-	/** Cumulative number of failed or timed-out termination attempts. */
-	terminationFailures: number;
-	/** Number of workers with no running tasks. */
-	idleWorkers: number;
-	/** Number of tasks currently running across all workers. */
-	runningTasks: number;
-	/** Number of existing workers that can accept another concurrent task. */
-	availableForConcurrency: number;
-	/** Cumulative valid calls received by the scheduler. */
-	submittedTasks: number;
-	/** Cumulative calls assigned to workers. */
-	startedTasks: number;
-	/** Cumulative successfully settled calls. */
-	completedTasks: number;
-	/** Cumulative failed calls not counted as cancellation, timeout, or drop. */
-	failedTasks: number;
-	/** Cumulative AbortSignal cancellations. */
-	cancelledTasks: number;
-	/** Cumulative queue and execution timeouts. */
-	timedOutTasks: number;
-	/** Cumulative calls evicted by the drop-oldest policy. */
-	droppedTasks: number;
-}
-
-/** Final outcome of an awaitable WorkerPool shutdown. */
-export interface WorkerPoolShutdownReport {
-	/** True when termination was confirmed for every worker. */
-	confirmed: boolean;
-	/** Workers whose termination could not be confirmed after all retries. */
-	unconfirmedWorkers: number;
-	/** Cumulative failed or timed-out termination attempts. */
-	terminationFailures: number;
-}
-
-/** Internal representation of a scheduled task. */
-export interface Task<TTask, TResult> {
-	task: TTask;
-	resolve: (value: TResult) => void;
-	reject: (reason?: unknown) => void;
-}
-
-/** Options for creating a WorkerPool. */
-export interface WorkerPoolOptions<TProxy extends CallableProxy<TProxy>> {
-	/** Maximum number of scheduler-managed, non-quarantined workers. */
-	size: number;
-	/** Optional callback for pool statistics. Observer errors do not break the pool. */
-	onUpdateStats?: WorkerPoolObserver<WorkerPoolStats>;
-	/** Receives structured task and worker events. Observer errors are isolated. */
-	onEvent?: WorkerPoolObserver<WorkerPoolEvent>;
-	/** Creates a fresh worker instance. */
-	workerFactory: WorkerFactory;
-	/** Creates the API proxy associated with a worker. */
-	proxyFactory: (worker: Worker) => TProxy;
-	/** Terminates an idle worker after this many milliseconds. */
-	workerIdleTimeoutMs?: number;
-	/** Retires a worker after this many assigned tasks. */
-	maxTasksPerWorker?: number;
-	/** Retires a worker after this lifetime, once its active tasks finish. */
-	maxWorkerLifetimeMs?: number;
-	/** Maximum concurrent tasks per worker. Defaults to 1. */
-	maxConcurrentTasksPerWorker?: number;
-	/** Maximum waiting tasks; running tasks do not count. Defaults to unlimited. */
-	maxQueueSize?: number;
-	/** Behavior when maxQueueSize would be exceeded. Defaults to reject. */
-	queueOverflowPolicy?: QueueOverflowPolicy;
-	/** Default maximum queue wait; false or undefined disables it. */
-	queueTimeoutMs?: number | false;
-	/**
-	 * Rejects a task that runs longer than this duration and recycles its worker.
-	 * Defaults to five minutes because this is the only portable way to recover
-	 * from a worker that silently closes. Set to false for intentionally unbounded
-	 * jobs, accepting that a silent worker exit can then leave work pending.
-	 */
-	taskTimeoutMs?: number | false;
-	/** Optional cleanup for resources owned by a proxy (for example Comlink.releaseProxy). */
-	proxyCleanup?: (proxy: TProxy) => void;
-	/**
-	 * Extra physical-worker allowance used to preserve healthy capacity while
-	 * removed workers have unconfirmed termination. Defaults to
-	 * max(2, floor(size / 2)).
-	 */
-	terminationFailureWorkerBuffer?: number;
-	/** Additional termination attempts after the initial attempt. Defaults to 3. */
-	terminationRetryAttempts?: number;
-	/** Initial retry delay; subsequent delays use exponential backoff. Defaults to 100ms. */
-	terminationRetryDelayMs?: number;
-	/** Absolute deadline for each asynchronous termination attempt. Defaults to 5 seconds. */
-	terminationAttemptTimeoutMs?: number;
-	/** Optional host-specific termination implementation. */
-	workerTerminator?: WorkerTerminator;
-	/** Receives isolated termination-attempt failures. */
-	onWorkerTerminationError?: WorkerPoolObserver<WorkerTerminationError>;
+interface WorkerBinding<TProxy> {
+	worker: WorkerHandle;
+	createProxy: () => TProxy;
+	terminate: BoundWorkerTerminator;
 }
 
 /** A lazy, bounded pool for proxying calls to Web Workers. */
@@ -259,12 +64,12 @@ export class WorkerPool<
 		args: unknown[];
 	},
 	TResult = Awaited<ReturnType<TProxy[TTask["method"]]>>,
+	TWorker extends WorkerHandle = Worker,
 > {
 	private readonly size: number;
 	private readonly onUpdate?: WorkerPoolObserver<WorkerPoolStats>;
 	private readonly onEvent?: WorkerPoolObserver<WorkerPoolEvent>;
-	private readonly proxyFactory: (worker: Worker) => TProxy;
-	private readonly workerFactory: WorkerFactory;
+	private readonly createWorkerBinding: () => WorkerBinding<TProxy>;
 	private readonly workerIdleTimeoutMs?: number;
 	private readonly maxTasksPerWorker?: number;
 	private readonly maxWorkerLifetimeMs?: number;
@@ -304,7 +109,7 @@ export class WorkerPool<
 	/** Resolves once every worker is confirmed terminated or cleanup is exhausted. */
 	public readonly terminated: Promise<WorkerPoolShutdownReport>;
 
-	constructor(options: WorkerPoolOptions<TProxy>) {
+	constructor(options: WorkerPoolConfiguration<TProxy, TWorker>) {
 		this.terminated = new Promise((resolve) => {
 			this.resolveTerminated = resolve;
 		});
@@ -387,8 +192,16 @@ export class WorkerPool<
 		this.size = options.size;
 		this.onUpdate = options.onUpdateStats;
 		this.onEvent = options.onEvent;
-		this.proxyFactory = options.proxyFactory;
-		this.workerFactory = options.workerFactory;
+		const { workerFactory, proxyFactory, workerTerminator } = options;
+		this.createWorkerBinding = () => {
+			const worker = workerFactory();
+			return {
+				worker,
+				createProxy: () => proxyFactory(worker),
+				terminate: () =>
+					workerTerminator ? workerTerminator(worker) : terminateWorker(worker),
+			};
+		};
 		this.workerIdleTimeoutMs = options.workerIdleTimeoutMs;
 		this.maxTasksPerWorker = options.maxTasksPerWorker;
 		this.maxWorkerLifetimeMs = options.maxWorkerLifetimeMs;
@@ -411,7 +224,6 @@ export class WorkerPool<
 			attemptTimeoutMs:
 				options.terminationAttemptTimeoutMs ??
 				DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS,
-			workerTerminator: options.workerTerminator,
 			onFailure: (error) => {
 				if (this.onEvent) {
 					this._emit({
@@ -870,20 +682,23 @@ export class WorkerPool<
 	}
 
 	private _createWorker(): WorkerMetadata<TProxy, TTask, TResult> {
-		const worker = this.workerFactory();
+		const binding = this.createWorkerBinding();
+		const { worker } = binding;
 		if (
 			(typeof worker !== "object" && typeof worker !== "function") ||
 			!worker
 		) {
-			throw new TypeError("workerFactory must return a Worker object");
+			throw new TypeError(
+				"workerFactory must return a Worker or SharedWorker object",
+			);
 		}
 		if (this.knownWorkers.has(worker)) {
-			throw new Error("workerFactory must return a fresh Worker instance");
+			throw new Error("workerFactory must return a fresh worker instance");
 		}
 		this.knownWorkers.add(worker);
 
 		const id = this.nextWorkerId++;
-		const failureEventTypes: string[] = [];
+		const failureListeners: WorkerFailureListenerRegistration[] = [];
 		// biome-ignore lint/style/useConst: listener setup must close over metadata before assignment.
 		let metadata: WorkerMetadata<TProxy, TTask, TResult> | undefined;
 		let constructionFailure: WorkerCrashedError | undefined;
@@ -904,13 +719,15 @@ export class WorkerPool<
 
 		let proxy: TProxy | undefined;
 		try {
-			for (const type of WORKER_FAILURE_EVENT_TYPES) {
-				failureEventTypes.push(type);
-				worker.addEventListener(type, failureHandler);
-				if (constructionFailure) throw constructionFailure;
+			for (const { target, eventTypes } of getWorkerFailureTargets(worker)) {
+				for (const type of eventTypes) {
+					failureListeners.push({ target, type });
+					target.addEventListener(type, failureHandler);
+					if (constructionFailure) throw constructionFailure;
+				}
 			}
 
-			const createdProxy = this.proxyFactory(worker);
+			const createdProxy = binding.createProxy();
 			if (
 				(typeof createdProxy !== "object" &&
 					typeof createdProxy !== "function") ||
@@ -921,9 +738,13 @@ export class WorkerPool<
 			proxy = createdProxy;
 			if (constructionFailure) throw constructionFailure;
 		} catch (error) {
-			this._removeFailureListeners(worker, failureHandler, failureEventTypes);
+			this._removeFailureListeners(failureHandler, failureListeners);
 			if (proxy !== undefined) this._cleanupProxy(proxy);
-			const termination = this.termination.quarantine(worker, id);
+			const termination = this.termination.quarantine(
+				worker,
+				binding.terminate,
+				id,
+			);
 			this.termination.attempt(termination);
 			throw constructionFailure ?? error;
 		}
@@ -932,6 +753,7 @@ export class WorkerPool<
 			id,
 			proxy,
 			worker,
+			terminate: binding.terminate,
 			taskCount: 0,
 			createdAt: monotonicNow(),
 			activeTasks: new Set<ScheduledTask<TTask, TResult>>(),
@@ -939,7 +761,7 @@ export class WorkerPool<
 			markedForTermination: false,
 			managed: false,
 			failureHandler,
-			failureEventTypes,
+			failureListeners,
 		};
 		return metadata;
 	}
@@ -1286,14 +1108,17 @@ export class WorkerPool<
 		}
 		worker.poolIndex = -1;
 		worker.managed = false;
-		const termination = this.termination.quarantine(worker.worker, worker.id);
+		const termination = this.termination.quarantine(
+			worker.worker,
+			worker.terminate,
+			worker.id,
+		);
 		this._clearIdleTimer(worker);
 		if (worker.lifetimeTimer !== undefined) clearTimeout(worker.lifetimeTimer);
 		worker.lifetimeTimer = undefined;
 		this._removeFailureListeners(
-			worker.worker,
 			worker.failureHandler,
-			worker.failureEventTypes,
+			worker.failureListeners,
 		);
 		this._cleanupProxy(worker.proxy);
 		if (this.onEvent) {
@@ -1314,13 +1139,12 @@ export class WorkerPool<
 	}
 
 	private _removeFailureListeners(
-		worker: Worker,
 		failureHandler: (event: Event) => void,
-		failureEventTypes: string[],
+		failureListeners: WorkerFailureListenerRegistration[],
 	): void {
-		for (const type of failureEventTypes.splice(0)) {
+		for (const { target, type } of failureListeners.splice(0)) {
 			try {
-				worker.removeEventListener(type, failureHandler);
+				target.removeEventListener(type, failureHandler);
 			} catch {
 				// Continue removing the remaining listeners independently.
 			}

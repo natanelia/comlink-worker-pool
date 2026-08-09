@@ -6,7 +6,11 @@ import {
 	type WorkerTerminationError,
 } from "comlink-worker-pool";
 import { type ReactNode, StrictMode } from "react";
-import { type UseWorkerPoolOptions, useWorkerPool } from "./useWorkerPool";
+import {
+	type UseSharedWorkerPoolOptions,
+	type UseWorkerPoolOptions,
+	useWorkerPool,
+} from "./useWorkerPool";
 
 // Mock worker implementation for test
 class MockWorker {
@@ -16,6 +20,29 @@ class MockWorker {
 	}
 	addEventListener() {}
 	removeEventListener() {}
+}
+
+class MockMessagePort extends EventTarget implements MessagePort {
+	onmessage: ((this: MessagePort, ev: MessageEvent) => unknown) | null = null;
+	onmessageerror: ((this: MessagePort, ev: MessageEvent) => unknown) | null =
+		null;
+	closeCalls = 0;
+
+	close(): void {
+		this.closeCalls++;
+	}
+
+	postMessage(
+		_message: unknown,
+		_options?: StructuredSerializeOptions | Transferable[],
+	): void {}
+
+	start(): void {}
+}
+
+class MockSharedWorker extends EventTarget implements SharedWorker {
+	onerror: ((this: AbstractWorker, ev: ErrorEvent) => unknown) | null = null;
+	readonly port = new MockMessagePort();
 }
 
 type TestApi = {
@@ -161,6 +188,44 @@ describe("useWorkerPool", () => {
 		});
 		expect(closedError).toBeInstanceOf(Error);
 		expect((closedError as Error).message).toMatch(/closed/i);
+	});
+
+	it("closes SharedWorker connections on reconfiguration and unmount", async () => {
+		const workers: MockSharedWorker[] = [];
+		const createOptions = (
+			reconfigureKey: number,
+		): UseSharedWorkerPoolOptions<TestApi> => ({
+			poolSize: 1,
+			reconfigureKey,
+			workerFactory: () => {
+				const worker = new MockSharedWorker();
+				workers.push(worker);
+				return worker;
+			},
+			proxyFactory: (worker) => {
+				expect(worker).toBeInstanceOf(MockSharedWorker);
+				return testApiImpl;
+			},
+		});
+		const { result, rerender, unmount } = renderHook(
+			({ reconfigureKey }) => useWorkerPool(createOptions(reconfigureKey)),
+			{ initialProps: { reconfigureKey: 0 } },
+		);
+		await waitFor(() => expect(result.current.poolStatus).toBe("ready"));
+		await act(async () => {
+			await result.current.call("add", 1, 2);
+		});
+
+		rerender({ reconfigureKey: 1 });
+		await waitFor(() => expect(workers[0].port.closeCalls).toBe(1));
+		await waitFor(() => expect(result.current.poolStatus).toBe("ready"));
+		await act(async () => {
+			await result.current.call("add", 2, 3);
+		});
+
+		expect(workers).toHaveLength(2);
+		unmount();
+		expect(workers[1].port.closeCalls).toBe(1);
 	});
 
 	it("uses a conservative automatic pool size", async () => {

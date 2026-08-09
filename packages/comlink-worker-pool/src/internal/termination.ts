@@ -1,5 +1,9 @@
-import type { WorkerTerminator } from "../WorkerPool";
 import { WorkerTerminationError } from "../errors";
+import type {
+	BoundWorkerTerminator,
+	WorkerHandle,
+	WorkerTerminationResult,
+} from "../worker";
 import { MAX_TIMER_DELAY_MS, monotonicNow } from "./lifecycle";
 
 export const DEFAULT_TERMINATION_RETRY_ATTEMPTS = 3;
@@ -7,7 +11,8 @@ export const DEFAULT_TERMINATION_RETRY_DELAY_MS = 100;
 export const DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS = 5_000;
 
 export interface TerminationRecord {
-	worker: Worker;
+	worker: WorkerHandle;
+	terminate: BoundWorkerTerminator;
 	workerId: number | undefined;
 	attempts: number;
 	exhausted: boolean;
@@ -19,14 +24,13 @@ export interface TerminationControllerOptions {
 	retryAttempts: number;
 	retryDelayMs: number;
 	attemptTimeoutMs: number;
-	workerTerminator?: WorkerTerminator;
 	onFailure: (error: WorkerTerminationError) => void;
 	onStateChange: () => void;
 }
 
 /** Owns quarantine, retry, deadline, and confirmation state for removed workers. */
 export class TerminationController {
-	private readonly records = new Map<Worker, TerminationRecord>();
+	private readonly records = new Map<WorkerHandle, TerminationRecord>();
 	private failureCount = 0;
 
 	constructor(private readonly options: TerminationControllerOptions) {}
@@ -53,12 +57,17 @@ export class TerminationController {
 		return false;
 	}
 
-	quarantine(worker: Worker, workerId?: number): TerminationRecord {
+	quarantine(
+		worker: WorkerHandle,
+		terminate: BoundWorkerTerminator,
+		workerId?: number,
+	): TerminationRecord {
 		const existing = this.records.get(worker);
 		if (existing) return existing;
 
 		const record: TerminationRecord = {
 			worker,
+			terminate,
 			workerId,
 			attempts: 0,
 			exhausted: false,
@@ -75,11 +84,9 @@ export class TerminationController {
 		record.attempts++;
 		const deadline = monotonicNow() + this.options.attemptTimeoutMs;
 
-		let result: ReturnType<WorkerTerminator>;
+		let result: WorkerTerminationResult;
 		try {
-			result = this.options.workerTerminator
-				? this.options.workerTerminator(record.worker)
-				: record.worker.terminate();
+			result = record.terminate();
 		} catch (error) {
 			this.recordFailure(record, error);
 			return;

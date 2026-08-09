@@ -3,11 +3,58 @@ import { WorkerPool } from "comlink-worker-pool";
 import { useWorkerPool } from "comlink-worker-pool-react";
 import { StrictMode, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
+import type { SharedWorkerApi } from "./shared-worker";
+import type { FailingSharedWorkerApi } from "./shared-worker-error";
 import type { BrowserWorkerApi } from "./worker";
 
 const createWorker = () =>
 	new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
 const createProxy = (worker: Worker) => wrap<BrowserWorkerApi>(worker);
+
+async function sharedWorkerConcurrency() {
+	const pool = new WorkerPool<SharedWorkerApi>({
+		size: 1,
+		maxConcurrentTasksPerWorker: 2,
+		workerFactory: () =>
+			new SharedWorker(new URL("./shared-worker.ts", import.meta.url), {
+				type: "module",
+			}),
+		proxyFactory: (worker) => wrap<SharedWorkerApi>(worker.port),
+	});
+	try {
+		const pending = [
+			pool.run("trackConcurrency", ["a", 30]),
+			pool.run("trackConcurrency", ["b", 30]),
+			pool.run("trackConcurrency", ["c", 30]),
+		];
+		const scheduled = pool.getStats();
+		const values = await Promise.all(pending);
+		const report = await pool.close();
+		return { report, scheduled, values };
+	} finally {
+		await pool.close();
+	}
+}
+
+async function sharedWorkerFailure() {
+	const pool = new WorkerPool<FailingSharedWorkerApi>({
+		size: 1,
+		taskTimeoutMs: 1_000,
+		workerFactory: () =>
+			new SharedWorker(new URL("./shared-worker-error.ts", import.meta.url), {
+				type: "module",
+			}),
+		proxyFactory: (worker) => wrap<FailingSharedWorkerApi>(worker.port),
+	});
+	let errorName = "";
+	try {
+		await pool.run("never", []);
+	} catch (error) {
+		errorName = error instanceof Error ? error.name : String(error);
+	}
+	const report = await pool.close();
+	return { errorName, report };
+}
 
 async function parallelCalls() {
 	const pool = new WorkerPool<BrowserWorkerApi>({
@@ -106,6 +153,8 @@ const browserChecks = {
 	hangRecovery: () => recover("hang"),
 	parallelCalls,
 	reactStrictMode,
+	sharedWorkerConcurrency,
+	sharedWorkerFailure,
 };
 window.browserChecks = browserChecks;
 
