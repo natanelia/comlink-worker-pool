@@ -52,6 +52,7 @@ describe("WorkerPool - SharedWorker lifecycle", () => {
 			"messageerror",
 			(worker: TestSharedWorker) => worker.port,
 		],
+		["connection port", "close", (worker: TestSharedWorker) => worker.port],
 	] as const)(
 		"observes failures from the %s",
 		async (_name, type, failureTarget) => {

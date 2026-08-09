@@ -22,11 +22,7 @@ export interface WorkerFailureTarget {
 	eventTypes: readonly string[];
 }
 
-const DEDICATED_WORKER_FAILURE_EVENT_TYPES = [
-	"error",
-	"messageerror",
-	"close",
-] as const;
+const DEDICATED_WORKER_FAILURE_EVENT_TYPES = ["error", "messageerror"] as const;
 const SHARED_WORKER_FAILURE_EVENT_TYPES = ["error"] as const;
 const SHARED_WORKER_PORT_FAILURE_EVENT_TYPES = [
 	"messageerror",

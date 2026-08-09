@@ -283,6 +283,36 @@ describe("WorkerPool - lifecycle robustness", () => {
 		pool.terminateAll();
 	});
 
+	test("ignores close and observes messageerror on dedicated workers", async () => {
+		const worker = new ControlledWorker();
+		const pool = new WorkerPool({
+			size: 1,
+			taskTimeoutMs: false,
+			workerFactory: () => asWorker(worker),
+			proxyFactory: () => ({ run: () => new Promise<string>(() => {}) }),
+		});
+
+		const outcome = pool
+			.getApi()
+			.run()
+			.then(
+				(value) => ({ status: "fulfilled" as const, value }),
+				(error: unknown) => ({ status: "rejected" as const, error }),
+			);
+		await flushMicrotasks();
+
+		worker.dispatchEvent(new Event("close"));
+		await flushMicrotasks();
+		expect(pool.getStats()).toMatchObject({ workers: 1, runningTasks: 1 });
+
+		worker.dispatchEvent(new Event("messageerror"));
+		await expect(outcome).resolves.toEqual({
+			status: "rejected",
+			error: expect.any(WorkerCrashedError),
+		});
+		await pool.close();
+	});
+
 	test("factory failures reject without ghost execution and clean partial workers", async () => {
 		let attempts = 0;
 		const executed: string[] = [];
