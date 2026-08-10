@@ -1,7 +1,10 @@
-import {
-	WorkerPool as WorkerPoolImplementation,
-	type WorkerPoolOptions,
-} from "./WorkerPool";
+import { WorkerPool as WorkerPoolImplementation } from "./WorkerPool";
+import type {
+	SharedWorkerPoolOptions,
+	WorkerPoolConfiguration,
+	WorkerPoolOptions,
+} from "./contracts";
+import type { WorkerHandle } from "./worker";
 
 type CallableProxy<TProxy> = {
 	// biome-ignore lint/suspicious/noExplicitAny: worker APIs may have arbitrary signatures
@@ -45,6 +48,27 @@ interface WorkerPoolConstructor {
 	>(
 		options: WorkerPoolOptions<TProxy>,
 	): WorkerPool<TProxy, TTask, TResult>;
+	new <
+		TProxy extends CallableProxy<TProxy>,
+		TTask extends { method: keyof TProxy; args: unknown[] } = {
+			method: keyof TProxy;
+			args: unknown[];
+		},
+		TResult = Awaited<ReturnType<TProxy[TTask["method"]]>>,
+	>(
+		options: SharedWorkerPoolOptions<TProxy>,
+	): WorkerPool<TProxy, TTask, TResult>;
+	new <
+		TWorker extends WorkerHandle,
+		TProxy extends CallableProxy<TProxy>,
+		TTask extends { method: keyof TProxy; args: unknown[] } = {
+			method: keyof TProxy;
+			args: unknown[];
+		},
+		TResult = Awaited<ReturnType<TProxy[TTask["method"]]>>,
+	>(
+		options: WorkerPoolConfiguration<TProxy, TWorker>,
+	): WorkerPool<TProxy, TTask, TResult>;
 }
 
 export const WorkerPool =
@@ -52,8 +76,8 @@ export const WorkerPool =
 
 export type {
 	QueueOverflowPolicy,
+	SharedWorkerPoolOptions,
 	Task,
-	WorkerFactory,
 	WorkerPoolEvent,
 	WorkerPoolObserver,
 	WorkerPoolOptions,
@@ -63,6 +87,6 @@ export type {
 	WorkerPoolTaskOutcome,
 	WorkerPoolWorkerRemovalReason,
 	WorkerTaskOptions,
-	WorkerTerminator,
-} from "./WorkerPool";
+} from "./contracts";
+export type { WorkerFactory, WorkerHandle, WorkerTerminator } from "./worker";
 export * from "./errors";
