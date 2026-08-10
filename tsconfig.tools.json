@@ -7,5 +7,6 @@
 		"playwright.config.ts",
 		"scripts/**/*.ts",
 		"packages/*/*.config.ts"
-	]
+	],
+	"exclude": ["scripts/fixtures/**"]
 }

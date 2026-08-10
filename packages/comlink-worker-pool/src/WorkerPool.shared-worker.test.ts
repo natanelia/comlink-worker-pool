@@ -29,7 +29,7 @@ interface SharedApi {
 }
 
 describe("WorkerPool - SharedWorker lifecycle", () => {
-	test("closes the connection port during default termination", async () => {
+	test("closes the connection port during default handle cleanup", async () => {
 		const worker = new TestSharedWorker();
 		const pool = new WorkerPool<SharedApi>({
 			size: 1,

@@ -356,6 +356,20 @@ describe("WorkerPool - lifecycle robustness", () => {
 		proxyFailurePool.terminateAll();
 	});
 
+	test("rejects invalid worker handles at the lease boundary", async () => {
+		const pool = new WorkerPool<{ run(): Promise<void> }>({
+			size: 1,
+			workerFactory: () => null as unknown as Worker,
+			proxyFactory: () => ({ run: async () => undefined }),
+		});
+
+		await expect(pool.run("run", [])).rejects.toThrow(
+			"workerFactory must return a Worker or SharedWorker object",
+		);
+		expect(pool.getStats()).toMatchObject({ workers: 0, queue: 0 });
+		await pool.close();
+	});
+
 	test("rejects invalid proxy values and cleans up their partial worker", async () => {
 		const worker = new ControlledWorker();
 		const pool = new WorkerPool<{ run(): Promise<void> }>({

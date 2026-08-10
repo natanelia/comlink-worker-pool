@@ -30,7 +30,7 @@ export class WorkerTaskTimeoutError extends Error {
 	}
 }
 
-/** Error reported when a worker termination attempt fails or times out. */
+/** Error reported when cleanup through workerTerminator fails or times out. */
 export class WorkerTerminationError extends Error {
 	readonly workerId: number | undefined;
 	readonly attempt: number;
@@ -56,7 +56,7 @@ export class WorkerTerminationError extends Error {
 	}
 }
 
-/** Error returned when quarantined workers consume all physical capacity. */
+/** Error returned when quarantined worker handles consume all capacity. */
 export class WorkerPoolCapacityError extends Error {
 	readonly physicalWorkerLimit: number;
 	readonly quarantinedWorkers: number;

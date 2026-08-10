@@ -1,18 +1,14 @@
 import { WorkerTerminationError } from "../errors";
-import type {
-	BoundWorkerTerminator,
-	WorkerHandle,
-	WorkerTerminationResult,
-} from "../worker";
+import type { BoundWorkerDisposer, WorkerTerminationResult } from "../worker";
 import { MAX_TIMER_DELAY_MS, monotonicNow } from "./lifecycle";
 
-export const DEFAULT_TERMINATION_RETRY_ATTEMPTS = 3;
-export const DEFAULT_TERMINATION_RETRY_DELAY_MS = 100;
-export const DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS = 5_000;
+export const DEFAULT_DISPOSAL_RETRY_ATTEMPTS = 3;
+export const DEFAULT_DISPOSAL_RETRY_DELAY_MS = 100;
+export const DEFAULT_DISPOSAL_ATTEMPT_TIMEOUT_MS = 5_000;
 
-export interface TerminationRecord {
-	worker: WorkerHandle;
-	terminate: BoundWorkerTerminator;
+export interface DisposalRecord {
+	identity: object;
+	dispose: BoundWorkerDisposer;
 	workerId: number | undefined;
 	attempts: number;
 	exhausted: boolean;
@@ -20,7 +16,7 @@ export interface TerminationRecord {
 	attemptTimers: Set<ReturnType<typeof setTimeout>>;
 }
 
-export interface TerminationControllerOptions {
+export interface DisposalControllerOptions {
 	retryAttempts: number;
 	retryDelayMs: number;
 	attemptTimeoutMs: number;
@@ -28,12 +24,12 @@ export interface TerminationControllerOptions {
 	onStateChange: () => void;
 }
 
-/** Owns quarantine, retry, deadline, and confirmation state for removed workers. */
-export class TerminationController {
-	private readonly records = new Map<WorkerHandle, TerminationRecord>();
+/** Owns quarantine, retry, deadline, and confirmation state for handle cleanup. */
+export class DisposalController {
+	private readonly records = new Map<object, DisposalRecord>();
 	private failureCount = 0;
 
-	constructor(private readonly options: TerminationControllerOptions) {}
+	constructor(private readonly options: DisposalControllerOptions) {}
 
 	get count(): number {
 		return this.records.size;
@@ -50,7 +46,7 @@ export class TerminationController {
 		return true;
 	}
 
-	hasRetryableWorker(): boolean {
+	hasRetryableHandle(): boolean {
 		for (const record of this.records.values()) {
 			if (!record.exhausted) return true;
 		}
@@ -58,27 +54,27 @@ export class TerminationController {
 	}
 
 	quarantine(
-		worker: WorkerHandle,
-		terminate: BoundWorkerTerminator,
+		identity: object,
+		dispose: BoundWorkerDisposer,
 		workerId?: number,
-	): TerminationRecord {
-		const existing = this.records.get(worker);
+	): DisposalRecord {
+		const existing = this.records.get(identity);
 		if (existing) return existing;
 
-		const record: TerminationRecord = {
-			worker,
-			terminate,
+		const record: DisposalRecord = {
+			identity,
+			dispose,
 			workerId,
 			attempts: 0,
 			exhausted: false,
 			attemptTimers: new Set(),
 		};
-		this.records.set(worker, record);
+		this.records.set(identity, record);
 		return record;
 	}
 
-	attempt(record: TerminationRecord): void {
-		if (this.records.get(record.worker) !== record) return;
+	attempt(record: DisposalRecord): void {
+		if (this.records.get(record.identity) !== record) return;
 		record.retryTimer = undefined;
 		record.exhausted = false;
 		record.attempts++;
@@ -86,7 +82,7 @@ export class TerminationController {
 
 		let result: WorkerTerminationResult;
 		try {
-			result = record.terminate();
+			result = record.dispose();
 		} catch (error) {
 			this.recordFailure(record, error);
 			return;
@@ -139,7 +135,7 @@ export class TerminationController {
 		const confirm = () => {
 			if (attemptFinished) {
 				if (timedOut) {
-					// A late success still confirms that the worker is gone.
+					// A late success still confirms that handle cleanup completed.
 					this.confirm(record);
 				}
 				return;
@@ -181,17 +177,17 @@ export class TerminationController {
 		}
 	}
 
-	private confirm(record: TerminationRecord): void {
-		if (this.records.get(record.worker) !== record) return;
+	private confirm(record: DisposalRecord): void {
+		if (this.records.get(record.identity) !== record) return;
 		if (record.retryTimer !== undefined) clearTimeout(record.retryTimer);
 		for (const timer of record.attemptTimers) clearTimeout(timer);
 		record.attemptTimers.clear();
-		this.records.delete(record.worker);
+		this.records.delete(record.identity);
 		this.options.onStateChange();
 	}
 
-	private recordFailure(record: TerminationRecord, cause: unknown): void {
-		if (this.records.get(record.worker) !== record) return;
+	private recordFailure(record: DisposalRecord, cause: unknown): void {
+		if (this.records.get(record.identity) !== record) return;
 		this.failureCount++;
 		const exhausted = record.attempts > this.options.retryAttempts;
 		record.exhausted = exhausted;

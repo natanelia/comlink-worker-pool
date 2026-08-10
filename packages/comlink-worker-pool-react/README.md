@@ -80,9 +80,9 @@ The hook creates its pool after the component commits and closes it during clean
 | `result` | Result of the latest tracked call |
 | `error` | Latest call or initialization error |
 | `call(method, ...args)` | Typed method invocation with latest-call state |
-| `close()` | Awaitable immediate shutdown with a termination report |
+| `close()` | Awaitable immediate shutdown with a handle-cleanup report |
 
-When `poolSize` is omitted, the default leaves one reported logical core free and caps the pool at four workers. Pool size, lifecycle, concurrency, queue, and timeout option changes recreate the owned pool.
+When `poolSize` is omitted, the default leaves one reported logical core free and caps the pool at four worker handles. Pool size, lifecycle, concurrency, queue, and timeout option changes recreate the owned pool.
 
 Inline factory identities do not recreate the pool. Increment or replace `reconfigureKey` when a new `workerFactory`, `proxyFactory`, `proxyCleanup`, or `workerTerminator` must take effect.
 
@@ -102,7 +102,7 @@ For overlapping hook calls, only the latest-started invocation updates tracked s
 - `maxQueueSize`, `queueOverflowPolicy`, and `queueTimeoutMs`
 - `taskTimeoutMs`
 - `workerIdleTimeoutMs`, `maxTasksPerWorker`, and `maxWorkerLifetimeMs`
-- termination retry, timeout, buffer, and custom terminator options
+- handle-cleanup retry, timeout, buffer, and custom terminator options
 - `onUpdateStats`, `onEvent`, and `onWorkerTerminationError`
 
 See the [core package documentation](../comlink-worker-pool/README.md) for exact semantics.

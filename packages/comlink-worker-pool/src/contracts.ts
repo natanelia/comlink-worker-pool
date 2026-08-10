@@ -96,7 +96,7 @@ export type WorkerPoolEvent =
 export interface WorkerPoolStats {
 	/** Current acceptance and shutdown state. */
 	state: WorkerPoolState;
-	/** Configured maximum number of scheduler-managed, non-quarantined workers. */
+	/** Configured maximum number of scheduler-managed, non-quarantined handles. */
 	size: number;
 	/** Configured maximum number of simultaneously running tasks. */
 	maxConcurrentTasks: number;
@@ -110,15 +110,15 @@ export interface WorkerPoolStats {
 	queueCapacityRemaining: number | null;
 	/** Age of the oldest waiting task, or null when the queue is empty. */
 	oldestQueuedTaskAgeMs: number | null;
-	/** Number of currently instantiated workers. */
+	/** Number of instantiated or quarantined worker handles. */
 	workers: number;
-	/** Scheduler-managed workers, including busy workers finishing before retirement. */
+	/** Scheduler-managed handles, including busy handles finishing before retirement. */
 	healthyWorkers: number;
-	/** Number of removed workers whose termination is not yet confirmed. */
+	/** Number of removed handles whose cleanup is not yet confirmed. */
 	quarantinedWorkers: number;
-	/** Configured extra physical-worker allowance for quarantined workers. */
+	/** Configured extra handle allowance for cleanup failures. */
 	terminationFailureWorkerBuffer: number;
-	/** Cumulative number of failed or timed-out termination attempts. */
+	/** Cumulative number of failed or timed-out handle cleanup attempts. */
 	terminationFailures: number;
 	/** Number of workers with no running tasks. */
 	idleWorkers: number;
@@ -144,11 +144,14 @@ export interface WorkerPoolStats {
 
 /** Final outcome of an awaitable WorkerPool shutdown. */
 export interface WorkerPoolShutdownReport {
-	/** True when termination was confirmed for every worker. */
+	/**
+	 * True when cleanup completed for every pool-owned handle. SharedWorker
+	 * cleanup confirms connection disposal, not termination of the shared process.
+	 */
 	confirmed: boolean;
-	/** Workers whose termination could not be confirmed after all retries. */
+	/** Worker handles whose cleanup could not be confirmed after all retries. */
 	unconfirmedWorkers: number;
-	/** Cumulative failed or timed-out termination attempts. */
+	/** Cumulative failed or timed-out handle cleanup attempts. */
 	terminationFailures: number;
 }
 
@@ -161,7 +164,7 @@ export interface Task<TTask, TResult> {
 
 /** Options shared by dedicated-worker and SharedWorker pools. */
 interface WorkerPoolCommonOptions<TProxy extends CallableProxy<TProxy>> {
-	/** Maximum number of scheduler-managed, non-quarantined workers. */
+	/** Maximum number of scheduler-managed, non-quarantined handles. */
 	size: number;
 	/** Optional callback for pool statistics. Observer errors do not break the pool. */
 	onUpdateStats?: WorkerPoolObserver<WorkerPoolStats>;
@@ -182,27 +185,27 @@ interface WorkerPoolCommonOptions<TProxy extends CallableProxy<TProxy>> {
 	/** Default maximum queue wait; false or undefined disables it. */
 	queueTimeoutMs?: number | false;
 	/**
-	 * Rejects a task that runs longer than this duration and recycles its worker.
-	 * Defaults to five minutes because this is the only portable way to recover
-	 * from a worker that silently closes. Set to false for intentionally unbounded
-	 * jobs, accepting that a silent worker exit can then leave work pending.
+	 * Rejects a task that runs longer than this duration and recycles its handle.
+	 * Defaults to five minutes because this is the portable recovery path for a
+	 * silent endpoint. Dedicated-worker cleanup stops that worker; SharedWorker
+	 * cleanup closes only the pool's connection, so remote work may continue.
+	 * Set to false for intentionally unbounded jobs.
 	 */
 	taskTimeoutMs?: number | false;
 	/** Optional cleanup for resources owned by a proxy (for example Comlink.releaseProxy). */
 	proxyCleanup?: (proxy: TProxy) => void;
 	/**
-	 * Extra physical-worker allowance used to preserve healthy capacity while
-	 * removed workers have unconfirmed termination. Defaults to
-	 * max(2, floor(size / 2)).
+	 * Extra handle allowance used to preserve healthy capacity while removed
+	 * handles have unconfirmed cleanup. Defaults to max(2, floor(size / 2)).
 	 */
 	terminationFailureWorkerBuffer?: number;
-	/** Additional termination attempts after the initial attempt. Defaults to 3. */
+	/** Additional handle-cleanup attempts after the initial attempt. Defaults to 3. */
 	terminationRetryAttempts?: number;
-	/** Initial retry delay; subsequent delays use exponential backoff. Defaults to 100ms. */
+	/** Initial cleanup retry delay; later delays use exponential backoff. Defaults to 100ms. */
 	terminationRetryDelayMs?: number;
-	/** Absolute deadline for each asynchronous termination attempt. Defaults to 5 seconds. */
+	/** Absolute deadline for each asynchronous cleanup attempt. Defaults to 5 seconds. */
 	terminationAttemptTimeoutMs?: number;
-	/** Receives isolated termination-attempt failures. */
+	/** Receives isolated handle-cleanup failures. */
 	onWorkerTerminationError?: WorkerPoolObserver<WorkerTerminationError>;
 }
 
@@ -210,11 +213,11 @@ interface WorkerPoolEndpointOptions<
 	TProxy extends CallableProxy<TProxy>,
 	TWorker extends WorkerHandle,
 > {
-	/** Creates a fresh worker whose lifecycle is owned by the pool. */
+	/** Creates a fresh worker handle whose lifecycle is owned by the pool. */
 	workerFactory: WorkerFactory<TWorker>;
-	/** Creates the API proxy associated with the worker. */
+	/** Creates the API proxy associated with the handle. */
 	proxyFactory: (worker: TWorker) => TProxy;
-	/** Optional host-specific termination implementation. */
+	/** Optional host-specific handle cleanup implementation. */
 	workerTerminator?: WorkerTerminator<TWorker>;
 }
 

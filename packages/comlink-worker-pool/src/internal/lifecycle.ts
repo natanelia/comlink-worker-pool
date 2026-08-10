@@ -1,10 +1,5 @@
-import type { BoundWorkerTerminator, WorkerHandle } from "../worker";
+import type { BoundWorkerDisposer } from "../worker";
 import type { ScheduledTask } from "./scheduler";
-
-export interface WorkerFailureListenerRegistration {
-	target: EventTarget;
-	type: string;
-}
 
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 export const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
@@ -12,8 +7,9 @@ export const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
 export interface WorkerMetadata<TProxy, TTask, TResult> {
 	id: number;
 	proxy: TProxy;
-	worker: WorkerHandle;
-	terminate: BoundWorkerTerminator;
+	identity: object;
+	dispose: BoundWorkerDisposer;
+	unsubscribeFailures: () => void;
 	taskCount: number;
 	createdAt: number;
 	activeTasks: Set<ScheduledTask<TTask, TResult>>;
@@ -24,8 +20,6 @@ export interface WorkerMetadata<TProxy, TTask, TResult> {
 	idleTimer?: ReturnType<typeof setTimeout>;
 	idleDeadline?: number;
 	lifetimeTimer?: ReturnType<typeof setTimeout>;
-	failureHandler: (event: Event) => void;
-	failureListeners: WorkerFailureListenerRegistration[];
 }
 
 /** Consumes a callback's optional thenable so asynchronous failures stay isolated. */

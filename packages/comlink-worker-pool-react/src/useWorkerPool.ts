@@ -58,19 +58,22 @@ interface UseWorkerPoolCommonOptions<TProxy extends CallableProxy<TProxy>> {
 	queueOverflowPolicy?: WorkerPoolOptions<TProxy>["queueOverflowPolicy"];
 	/** Default maximum time a task may wait in the queue. */
 	queueTimeoutMs?: WorkerPoolOptions<TProxy>["queueTimeoutMs"];
-	/** Rejects overlong tasks and recycles their worker (five-minute default). */
+	/**
+	 * Rejects overlong tasks and disposes their handle (five-minute default).
+	 * SharedWorker work may continue after its connection port closes.
+	 */
 	taskTimeoutMs?: WorkerPoolOptions<TProxy>["taskTimeoutMs"];
 	/** Cleans up resources owned by a worker proxy. */
 	proxyCleanup?: (proxy: TProxy) => void;
-	/** Extra worker slots that preserve capacity after termination failure. */
+	/** Extra handle slots that preserve capacity after cleanup failure. */
 	terminationFailureWorkerBuffer?: WorkerPoolOptions<TProxy>["terminationFailureWorkerBuffer"];
-	/** Additional termination attempts after the initial attempt. */
+	/** Additional handle-cleanup attempts after the initial attempt. */
 	terminationRetryAttempts?: WorkerPoolOptions<TProxy>["terminationRetryAttempts"];
-	/** Initial exponential-backoff delay for termination retries. */
+	/** Initial exponential-backoff delay for handle-cleanup retries. */
 	terminationRetryDelayMs?: WorkerPoolOptions<TProxy>["terminationRetryDelayMs"];
-	/** Deadline for an asynchronous termination attempt. */
+	/** Deadline for an asynchronous handle-cleanup attempt. */
 	terminationAttemptTimeoutMs?: WorkerPoolOptions<TProxy>["terminationAttemptTimeoutMs"];
-	/** Receives termination-attempt failures without reconfiguring the pool. */
+	/** Receives handle-cleanup failures without reconfiguring the pool. */
 	onWorkerTerminationError?: WorkerPoolOptions<TProxy>["onWorkerTerminationError"];
 	/**
 	 * Explicitly recreates the pool when this value changes.
@@ -90,7 +93,7 @@ interface UseWorkerPoolEndpointOptions<
 	workerFactory: WorkerFactory<TWorker>;
 	/** Creates the proxy API for the worker. */
 	proxyFactory: (worker: TWorker) => TProxy;
-	/** Optional host-specific worker terminator. */
+	/** Optional host-specific worker-handle cleanup. */
 	workerTerminator?: WorkerTerminator<TWorker>;
 }
 
