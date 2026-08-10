@@ -1,5 +1,12 @@
 # comlink-worker-pool
 
+## 0.1.2
+
+### Patch Changes
+
+- a1f1787: Accept fresh `SharedWorker` objects as pool-owned handles, infer `SharedWorker` in proxy and termination callbacks, observe failures from both the worker and its port, and close connection ports automatically during retirement. Concurrent scheduling now works through both the core pool and React hook without unsafe casts.
+- 2f9c7b3: Correct the public scheduled API types so every pooled method returns a Promise, while reserved `then` and symbol keys are omitted from `getApi()` and the React hook API.
+
 ## 0.1.1
 
 ### Patch Changes
