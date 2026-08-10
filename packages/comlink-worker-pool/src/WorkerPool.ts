@@ -21,9 +21,14 @@ import {
 	WorkerTaskTimeoutError,
 } from "./errors";
 import {
+	DEFAULT_DISPOSAL_ATTEMPT_TIMEOUT_MS,
+	DEFAULT_DISPOSAL_RETRY_ATTEMPTS,
+	DEFAULT_DISPOSAL_RETRY_DELAY_MS,
+	DisposalController,
+} from "./internal/disposal";
+import {
 	DEFAULT_TASK_TIMEOUT_MS,
 	MAX_TIMER_DELAY_MS,
-	type WorkerFailureListenerRegistration,
 	type WorkerMetadata,
 	assertFunction,
 	assertNonNegativeInteger,
@@ -35,26 +40,13 @@ import {
 } from "./internal/lifecycle";
 import { type ScheduledTask, SchedulerQueue } from "./internal/scheduler";
 import {
-	DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS,
-	DEFAULT_TERMINATION_RETRY_ATTEMPTS,
-	DEFAULT_TERMINATION_RETRY_DELAY_MS,
-	TerminationController,
-} from "./internal/termination";
-import {
-	type BoundWorkerTerminator,
 	type WorkerHandle,
-	getWorkerFailureTargets,
-	terminateWorker,
+	type WorkerLease,
+	createWorkerLeaseFactory,
 } from "./worker";
 
 export * from "./contracts";
 export * from "./errors";
-
-interface WorkerBinding<TProxy> {
-	worker: WorkerHandle;
-	createProxy: () => TProxy;
-	terminate: BoundWorkerTerminator;
-}
 
 /** A lazy, bounded pool for proxying calls to Web Workers. */
 export class WorkerPool<
@@ -69,7 +61,7 @@ export class WorkerPool<
 	private readonly size: number;
 	private readonly onUpdate?: WorkerPoolObserver<WorkerPoolStats>;
 	private readonly onEvent?: WorkerPoolObserver<WorkerPoolEvent>;
-	private readonly createWorkerBinding: () => WorkerBinding<TProxy>;
+	private readonly createWorkerLease: () => WorkerLease<TProxy>;
 	private readonly workerIdleTimeoutMs?: number;
 	private readonly maxTasksPerWorker?: number;
 	private readonly maxWorkerLifetimeMs?: number;
@@ -79,9 +71,9 @@ export class WorkerPool<
 	private readonly queueTimeoutMs?: number;
 	private readonly taskTimeoutMs?: number;
 	private readonly proxyCleanup?: (proxy: TProxy) => void;
-	private readonly terminationFailureWorkerBuffer: number;
-	private readonly physicalWorkerLimit: number;
-	private readonly termination: TerminationController;
+	private readonly disposalFailureHandleBuffer: number;
+	private readonly physicalHandleLimit: number;
+	private readonly disposal: DisposalController;
 
 	private workers: WorkerMetadata<TProxy, TTask, TResult>[] = [];
 	private readonly queue = new SchedulerQueue<TTask, TResult>();
@@ -92,7 +84,7 @@ export class WorkerPool<
 	private nextTaskSequence = 0;
 	private accepting = true;
 	private drainRequested = false;
-	private terminationStarted = false;
+	private shutdownStarted = false;
 	private workerCreationsInProgress = 0;
 	private scheduling = false;
 	private rescheduleRequested = false;
@@ -106,7 +98,7 @@ export class WorkerPool<
 	private droppedTasks = 0;
 	private readonly knownWorkers = new WeakSet<object>();
 	private resolveTerminated!: (report: WorkerPoolShutdownReport) => void;
-	/** Resolves once every worker is confirmed terminated or cleanup is exhausted. */
+	/** Resolves once cleanup is confirmed or exhausted for every owned handle. */
 	public readonly terminated: Promise<WorkerPoolShutdownReport>;
 
 	constructor(options: WorkerPoolConfiguration<TProxy, TWorker>) {
@@ -162,19 +154,16 @@ export class WorkerPool<
 			options.taskTimeoutMs === false ? undefined : options.taskTimeoutMs,
 			"taskTimeoutMs",
 		);
-		const terminationFailureWorkerBuffer =
+		const disposalFailureHandleBuffer =
 			options.terminationFailureWorkerBuffer ??
 			Math.max(2, Math.floor(options.size / 2));
 		assertNonNegativeInteger(
-			terminationFailureWorkerBuffer,
+			disposalFailureHandleBuffer,
 			"terminationFailureWorkerBuffer",
 		);
-		const terminationRetryAttempts =
-			options.terminationRetryAttempts ?? DEFAULT_TERMINATION_RETRY_ATTEMPTS;
-		assertNonNegativeInteger(
-			terminationRetryAttempts,
-			"terminationRetryAttempts",
-		);
+		const disposalRetryAttempts =
+			options.terminationRetryAttempts ?? DEFAULT_DISPOSAL_RETRY_ATTEMPTS;
+		assertNonNegativeInteger(disposalRetryAttempts, "terminationRetryAttempts");
 		assertPositiveDuration(
 			options.terminationRetryDelayMs,
 			"terminationRetryDelayMs",
@@ -183,7 +172,7 @@ export class WorkerPool<
 			options.terminationAttemptTimeoutMs,
 			"terminationAttemptTimeoutMs",
 		);
-		if (!Number.isSafeInteger(options.size + terminationFailureWorkerBuffer)) {
+		if (!Number.isSafeInteger(options.size + disposalFailureHandleBuffer)) {
 			throw new RangeError(
 				"size + terminationFailureWorkerBuffer must be a safe integer",
 			);
@@ -192,16 +181,11 @@ export class WorkerPool<
 		this.size = options.size;
 		this.onUpdate = options.onUpdateStats;
 		this.onEvent = options.onEvent;
-		const { workerFactory, proxyFactory, workerTerminator } = options;
-		this.createWorkerBinding = () => {
-			const worker = workerFactory();
-			return {
-				worker,
-				createProxy: () => proxyFactory(worker),
-				terminate: () =>
-					workerTerminator ? workerTerminator(worker) : terminateWorker(worker),
-			};
-		};
+		this.createWorkerLease = createWorkerLeaseFactory(
+			options.workerFactory,
+			options.proxyFactory,
+			options.workerTerminator,
+		);
 		this.workerIdleTimeoutMs = options.workerIdleTimeoutMs;
 		this.maxTasksPerWorker = options.maxTasksPerWorker;
 		this.maxWorkerLifetimeMs = options.maxWorkerLifetimeMs;
@@ -215,15 +199,15 @@ export class WorkerPool<
 				? undefined
 				: (options.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS);
 		this.proxyCleanup = options.proxyCleanup;
-		this.terminationFailureWorkerBuffer = terminationFailureWorkerBuffer;
-		this.physicalWorkerLimit = options.size + terminationFailureWorkerBuffer;
-		this.termination = new TerminationController({
-			retryAttempts: terminationRetryAttempts,
+		this.disposalFailureHandleBuffer = disposalFailureHandleBuffer;
+		this.physicalHandleLimit = options.size + disposalFailureHandleBuffer;
+		this.disposal = new DisposalController({
+			retryAttempts: disposalRetryAttempts,
 			retryDelayMs:
-				options.terminationRetryDelayMs ?? DEFAULT_TERMINATION_RETRY_DELAY_MS,
+				options.terminationRetryDelayMs ?? DEFAULT_DISPOSAL_RETRY_DELAY_MS,
 			attemptTimeoutMs:
 				options.terminationAttemptTimeoutMs ??
-				DEFAULT_TERMINATION_ATTEMPT_TIMEOUT_MS,
+				DEFAULT_DISPOSAL_ATTEMPT_TIMEOUT_MS,
 			onFailure: (error) => {
 				if (this.onEvent) {
 					this._emit({
@@ -281,16 +265,16 @@ export class WorkerPool<
 		>;
 	}
 
-	/** Stops accepting work, finishes accepted calls, then shuts down all workers. */
+	/** Stops accepting work, finishes accepted calls, then cleans up all handles. */
 	public drain(): Promise<WorkerPoolShutdownReport> {
-		if (this.terminationStarted) return this.terminated;
+		if (this.shutdownStarted) return this.terminated;
 		this.accepting = false;
 		this.drainRequested = true;
 		this._next();
 		if (
 			this.queue.length > 0 &&
 			this.workers.length === 0 &&
-			this.termination.count === 0 &&
+			this.disposal.count === 0 &&
 			this.workerCreationsInProgress === 0
 		) {
 			// A bounded no-progress scheduling pass has no future trigger once the
@@ -309,12 +293,12 @@ export class WorkerPool<
 		return this.terminated;
 	}
 
-	/** Permanently closes the pool, rejects work, and starts bounded worker termination. */
+	/** Permanently closes the pool, rejects work, and starts bounded handle cleanup. */
 	public terminateAll(): void {
-		if (this.terminationStarted) return;
+		if (this.shutdownStarted) return;
 		this.accepting = false;
 		this.drainRequested = false;
-		this.terminationStarted = true;
+		this.shutdownStarted = true;
 		const reason = new WorkerPoolTerminatedError();
 
 		for (const item of this.queue.drain()) {
@@ -354,19 +338,19 @@ export class WorkerPool<
 			}
 		}
 
-		const physicalWorkerCount = this.workers.length + this.termination.count;
-		const uncreatedCapacity = this.terminationStarted
+		const physicalHandleCount = this.workers.length + this.disposal.count;
+		const uncreatedCapacity = this.shutdownStarted
 			? 0
 			: Math.max(
 					0,
 					Math.min(
 						this.size - this.workers.length,
-						this.physicalWorkerLimit - physicalWorkerCount,
+						this.physicalHandleLimit - physicalHandleCount,
 					),
 				);
 
 		return {
-			state: this.terminationStarted
+			state: this.shutdownStarted
 				? "closed"
 				: this.drainRequested
 					? "draining"
@@ -383,11 +367,11 @@ export class WorkerPool<
 				: null,
 			oldestQueuedTaskAgeMs:
 				oldestQueuedAt === null ? null : Math.max(0, now - oldestQueuedAt),
-			workers: physicalWorkerCount,
+			workers: physicalHandleCount,
 			healthyWorkers: this.workers.length,
-			quarantinedWorkers: this.termination.count,
-			terminationFailureWorkerBuffer: this.terminationFailureWorkerBuffer,
-			terminationFailures: this.termination.failures,
+			quarantinedWorkers: this.disposal.count,
+			terminationFailureWorkerBuffer: this.disposalFailureHandleBuffer,
+			terminationFailures: this.disposal.failures,
 			idleWorkers,
 			runningTasks,
 			availableForConcurrency,
@@ -551,7 +535,7 @@ export class WorkerPool<
 	}
 
 	private _next(): void {
-		if (this.terminationStarted) return;
+		if (this.shutdownStarted) return;
 		if (this.scheduling) {
 			this.rescheduleRequested = true;
 			return;
@@ -563,7 +547,7 @@ export class WorkerPool<
 			do {
 				const startedTasksBeforePass = this.startedTasks;
 				this.rescheduleRequested = false;
-				while (this.queue.length > 0 && !this.terminationStarted) {
+				while (this.queue.length > 0 && !this.shutdownStarted) {
 					let worker: WorkerMetadata<TProxy, TTask, TResult> | null;
 					try {
 						worker = this._getAvailableWorker();
@@ -591,7 +575,7 @@ export class WorkerPool<
 				} else {
 					retriedWithoutProgress = false;
 				}
-			} while (this.rescheduleRequested && !this.terminationStarted);
+			} while (this.rescheduleRequested && !this.shutdownStarted);
 		} finally {
 			this.scheduling = false;
 		}
@@ -616,10 +600,10 @@ export class WorkerPool<
 			return worker;
 		}
 
-		const physicalWorkerCount = this.workers.length + this.termination.count;
+		const physicalHandleCount = this.workers.length + this.disposal.count;
 		const canCreate =
 			this.workers.length < this.size &&
-			physicalWorkerCount < this.physicalWorkerLimit;
+			physicalHandleCount < this.physicalHandleLimit;
 		if (!canCreate) return this._findLeastLoadedWorker();
 
 		this.workerCreationsInProgress++;
@@ -643,7 +627,7 @@ export class WorkerPool<
 				});
 			}
 			if (!this._containsWorker(worker)) return null;
-			if (this.terminationStarted) {
+			if (this.shutdownStarted) {
 				this._removeWorker(worker, true, "shutdown");
 				return null;
 			}
@@ -653,7 +637,7 @@ export class WorkerPool<
 			return worker;
 		} finally {
 			this.workerCreationsInProgress--;
-			if (this.terminationStarted || this.drainRequested) this._updateStats();
+			if (this.shutdownStarted || this.drainRequested) this._updateStats();
 		}
 	}
 
@@ -682,23 +666,13 @@ export class WorkerPool<
 	}
 
 	private _createWorker(): WorkerMetadata<TProxy, TTask, TResult> {
-		const binding = this.createWorkerBinding();
-		const { worker } = binding;
-		if (
-			(typeof worker !== "object" && typeof worker !== "function") ||
-			!worker
-		) {
-			throw new TypeError(
-				"workerFactory must return a Worker or SharedWorker object",
-			);
-		}
-		if (this.knownWorkers.has(worker)) {
+		const lease = this.createWorkerLease();
+		if (this.knownWorkers.has(lease.identity)) {
 			throw new Error("workerFactory must return a fresh worker instance");
 		}
-		this.knownWorkers.add(worker);
+		this.knownWorkers.add(lease.identity);
 
 		const id = this.nextWorkerId++;
-		const failureListeners: WorkerFailureListenerRegistration[] = [];
 		// biome-ignore lint/style/useConst: listener setup must close over metadata before assignment.
 		let metadata: WorkerMetadata<TProxy, TTask, TResult> | undefined;
 		let constructionFailure: WorkerCrashedError | undefined;
@@ -717,17 +691,13 @@ export class WorkerPool<
 			}
 		};
 
+		let unsubscribeFailures!: () => void;
 		let proxy: TProxy | undefined;
 		try {
-			for (const { target, eventTypes } of getWorkerFailureTargets(worker)) {
-				for (const type of eventTypes) {
-					failureListeners.push({ target, type });
-					target.addEventListener(type, failureHandler);
-					if (constructionFailure) throw constructionFailure;
-				}
-			}
+			unsubscribeFailures = lease.subscribeToFailures(failureHandler);
+			if (constructionFailure) throw constructionFailure;
 
-			const createdProxy = binding.createProxy();
+			const createdProxy = lease.createProxy();
 			if (
 				(typeof createdProxy !== "object" &&
 					typeof createdProxy !== "function") ||
@@ -738,30 +708,29 @@ export class WorkerPool<
 			proxy = createdProxy;
 			if (constructionFailure) throw constructionFailure;
 		} catch (error) {
-			this._removeFailureListeners(failureHandler, failureListeners);
+			unsubscribeFailures?.();
 			if (proxy !== undefined) this._cleanupProxy(proxy);
-			const termination = this.termination.quarantine(
-				worker,
-				binding.terminate,
+			const disposal = this.disposal.quarantine(
+				lease.identity,
+				lease.dispose,
 				id,
 			);
-			this.termination.attempt(termination);
+			this.disposal.attempt(disposal);
 			throw constructionFailure ?? error;
 		}
 
 		metadata = {
 			id,
 			proxy,
-			worker,
-			terminate: binding.terminate,
+			identity: lease.identity,
+			dispose: lease.dispose,
+			unsubscribeFailures,
 			taskCount: 0,
 			createdAt: monotonicNow(),
 			activeTasks: new Set<ScheduledTask<TTask, TResult>>(),
 			poolIndex: -1,
 			markedForTermination: false,
 			managed: false,
-			failureHandler,
-			failureListeners,
 		};
 		return metadata;
 	}
@@ -855,7 +824,7 @@ export class WorkerPool<
 		worker.activeTasks.delete(item);
 		this._settleTask(item, succeeded, value);
 
-		if (!this._containsWorker(worker) || this.terminationStarted) return;
+		if (!this._containsWorker(worker) || this.shutdownStarted) return;
 		if (worker.activeTasks.size === 0) {
 			if (worker.markedForTermination || this._hasExpired(worker)) {
 				this._removeWorker(
@@ -1019,7 +988,7 @@ export class WorkerPool<
 	): void {
 		if (this.maxWorkerLifetimeMs === undefined) return;
 		const schedule = () => {
-			if (!this._containsWorker(worker) || this.terminationStarted) return;
+			if (!this._containsWorker(worker) || this.shutdownStarted) return;
 			const remaining =
 				(this.maxWorkerLifetimeMs as number) -
 				(monotonicNow() - worker.createdAt);
@@ -1054,7 +1023,7 @@ export class WorkerPool<
 			if (
 				!this._containsWorker(worker) ||
 				worker.activeTasks.size > 0 ||
-				this.terminationStarted
+				this.shutdownStarted
 			) {
 				return;
 			}
@@ -1095,7 +1064,7 @@ export class WorkerPool<
 		if (!worker.managed || (!force && worker.activeTasks.size > 0)) return;
 		let index = worker.poolIndex;
 		if (index < 0 || this.workers[index] !== worker) {
-			// Shutdown must still detach and terminate even if poolIndex drifted.
+			// Shutdown must still detach and dispose even if poolIndex drifted.
 			if (!force) return;
 			index = this.workers.lastIndexOf(worker);
 			if (index < 0) return;
@@ -1108,18 +1077,15 @@ export class WorkerPool<
 		}
 		worker.poolIndex = -1;
 		worker.managed = false;
-		const termination = this.termination.quarantine(
-			worker.worker,
-			worker.terminate,
+		const disposal = this.disposal.quarantine(
+			worker.identity,
+			worker.dispose,
 			worker.id,
 		);
 		this._clearIdleTimer(worker);
 		if (worker.lifetimeTimer !== undefined) clearTimeout(worker.lifetimeTimer);
 		worker.lifetimeTimer = undefined;
-		this._removeFailureListeners(
-			worker.failureHandler,
-			worker.failureListeners,
-		);
+		worker.unsubscribeFailures();
 		this._cleanupProxy(worker.proxy);
 		if (this.onEvent) {
 			this._emit({
@@ -1129,26 +1095,13 @@ export class WorkerPool<
 				reason,
 			});
 		}
-		this.termination.attempt(termination);
+		this.disposal.attempt(disposal);
 	}
 
 	private _containsWorker(
 		worker: WorkerMetadata<TProxy, TTask, TResult>,
 	): boolean {
 		return worker.managed;
-	}
-
-	private _removeFailureListeners(
-		failureHandler: (event: Event) => void,
-		failureListeners: WorkerFailureListenerRegistration[],
-	): void {
-		for (const { target, type } of failureListeners.splice(0)) {
-			try {
-				target.removeEventListener(type, failureHandler);
-			} catch {
-				// Continue removing the remaining listeners independently.
-			}
-		}
 	}
 
 	private _cleanupProxy(proxy: TProxy): void {
@@ -1168,18 +1121,18 @@ export class WorkerPool<
 
 	private _rejectQueueIfPermanentlyExhausted(): void {
 		if (
-			this.terminationStarted ||
+			this.shutdownStarted ||
 			this.queue.length === 0 ||
 			this.workers.length > 0 ||
-			this.workers.length + this.termination.count < this.physicalWorkerLimit ||
-			this.termination.hasRetryableWorker()
+			this.workers.length + this.disposal.count < this.physicalHandleLimit ||
+			this.disposal.hasRetryableHandle()
 		) {
 			return;
 		}
 
 		const error = new WorkerPoolCapacityError(
-			this.physicalWorkerLimit,
-			this.termination.count,
+			this.physicalHandleLimit,
+			this.disposal.count,
 		);
 		for (const item of this.queue.drain()) {
 			this._settleTask(item, false, error);
@@ -1189,7 +1142,7 @@ export class WorkerPool<
 	private _updateStats(): void {
 		if (
 			this.drainRequested &&
-			!this.terminationStarted &&
+			!this.shutdownStarted &&
 			this.workerCreationsInProgress === 0 &&
 			this.queue.length === 0 &&
 			this.workers.every((worker) => worker.activeTasks.size === 0)
@@ -1198,17 +1151,17 @@ export class WorkerPool<
 			return;
 		}
 		if (
-			this.terminationStarted &&
+			this.shutdownStarted &&
 			!this.shutdownResolved &&
 			this.workerCreationsInProgress === 0 &&
 			this.workers.length === 0 &&
-			this.termination.allExhausted()
+			this.disposal.allExhausted()
 		) {
 			this.shutdownResolved = true;
 			this.resolveTerminated({
-				confirmed: this.termination.count === 0,
-				unconfirmedWorkers: this.termination.count,
-				terminationFailures: this.termination.failures,
+				confirmed: this.disposal.count === 0,
+				unconfirmedWorkers: this.disposal.count,
+				terminationFailures: this.disposal.failures,
 			});
 		}
 		if (!this.onUpdate) return;
