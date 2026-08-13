@@ -1,3 +1,6 @@
+[install]
+ignoreScripts = true
+
 [test]
 preload = ["./packages/comlink-worker-pool-react/test/setup.ts"]
 coverageThreshold = 0.9
